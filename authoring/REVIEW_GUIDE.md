@@ -26,7 +26,7 @@ Do not manufacture a section merely to fill a roadmap topic. Chapter 1 was accep
 
 **Combined delivery.** Verify the endpoint’s behavior and presentation, then deliver the actual section and code for final acceptance. Text approval and a passing endpoint are different pieces of evidence. Do not move on while either text or implementation corrections remain unresolved. A documentation-only task ends with its documents and consistency checks, without inventing a Rust implementation pass.
 
-The introduction and Section 1.1 are accepted examples; their paths and evidence are in [status](AUTHORING_STATUS.md). Section 1.1 establishes a first code introduction, a focused modification, complete file views, and ordered command/output presentation. An algorithm lesson with an explanatory visual has not yet been authored or accepted.
+The introduction and Section 1.1 are accepted examples; their paths and evidence are in [status](AUTHORING_STATUS.md). Section 1.1 establishes a first code introduction, a focused modification, complete file views, and ordered command/output presentation. [Section 5.1](../site/src/content/docs/chapter-5/5.1-first-tokens.mdx) is now an accepted example of introducing scanner behavior, byte ranges, focused tests, and an interactive character cursor. Reuse its actual explanation and presentation as a style reference; later mechanisms still need their own scope review.
 
 ## Four human review questions
 

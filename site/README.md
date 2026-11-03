@@ -87,3 +87,8 @@ Section 5.1 is drafted at `src/content/docs/chapter-5/5.1-first-tokens.mdx`,
 served at `/chapter-5/5.1-first-tokens/`. Its React character-cursor visual
 uses two authored examples verified against the matching Rust scanner.
 The section, cursor visual, and matching Rust implementation are accepted.
+
+Section 5.2 is drafted at `src/content/docs/chapter-5/5.2-lookahead.mdx`,
+served at `/chapter-5/5.2-lookahead/`. Its lookahead cursor contrasts matching,
+nonmatching, and exhausted input using fixed authored frames. The section, native implementation, and lookahead visual are accepted;
+local checks and native cursor comparisons pass.

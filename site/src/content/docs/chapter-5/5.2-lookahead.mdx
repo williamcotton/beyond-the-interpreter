@@ -1,0 +1,436 @@
+---
+title: 5.2 — Look ahead before choosing
+slug: chapter-5/5.2-lookahead
+description: Recognize paired operators without consuming a character that belongs to the next token.
+prev:
+  link: /chapter-5/5.1-first-tokens/
+  label: 5.1 · Read a character, emit a token
+next: false
+---
+
+import LookaheadCursor from '../../../components/LookaheadCursor';
+
+<p className="book-subtitle">Chapter 5 · Building a Scanner by Hand</p>
+
+Our scanner turns `!=` into `Bang` followed by `Equal`. In Lox, those two
+characters together spell a single operator: “not equal.” We can’t always
+decide a token’s kind from its first character.
+
+After reading `!`, we need to ask a question about the next character. If it
+is `=`, consume it and emit `BangEqual`. Otherwise, emit `Bang` and leave the
+next character for the next token. The same choice distinguishes `=` from
+`==`.
+
+Start from [Section 5.1](/chapter-5/5.1-first-tokens/), with the terminal in
+**`rlox/`**. All edits in this section belong to
+**`rlox/crates/syntax/src/lib.rs`**. The scanner keeps its existing public
+signature, `scan(source: &str) -> Vec<Token>`.
+
+## Inspecting is different from consuming
+
+Consider `!(`. Reading `!` advances us to byte `1`. We inspect the `(` there,
+but it doesn’t complete `!=`. If we consume it just to make that comparison,
+the next loop iteration will never see the opening parenthesis.
+
+**Lookahead** lets us inspect what comes next while leaving it available.
+Only a successful match should advance the cursor a second time. Step through
+`!=` and `!(` below and compare the inspection step: the cursor stays at byte
+`1` in both cases. Then one case consumes `=`, while the other leaves `(`
+unread. The `=` example shows what happens when nothing follows an operator.
+
+<LookaheadCursor client:load />
+
+For `!=`, the token starts at byte `0` and ends at byte `2`. For `!(`, the
+first token still ends at byte `1`, and the parenthesis begins the next one.
+The decision changes both the kind and the range.
+
+## Give the iterator a name
+
+First add the two paired-operator kinds to `SyntaxKind`, beside their
+single-character counterparts:
+
+```diff title="rlox/crates/syntax/src/lib.rs · SyntaxKind"
+     Bang,
++    BangEqual,
+     Equal,
++    EqualEqual,
+     Error,
+```
+
+Our `for` loop currently owns the character iterator and advances it once per
+iteration. We now need the loop body to advance that same iterator when a
+second character belongs to the token. We’ll keep it in a local variable and
+call `next()` explicitly.
+
+The following scanner edits form one change: finish them, including removing
+the old `end` declaration, before running the tests.
+
+Immediately after `let mut tokens = Vec::new();`, create a **peekable**
+iterator. Replace the `for` loop header and initialize the token end just
+inside the new loop:
+
+```diff title="rlox/crates/syntax/src/lib.rs · beginning of scan"
+     let mut tokens = Vec::new();
++    let mut chars = source.char_indices().peekable();
+ 
+-    for (start, ch) in source.char_indices() {
++    while let Some((start, ch)) = chars.next() {
++        let mut end = start + ch.len_utf8();
+         let kind = match ch {
+```
+
+`chars.next()` returns `Some((offset, character))` while input remains, and
+`None` at the end. The
+[`while let` pattern](https://doc.rust-lang.org/book/ch19-01-all-the-places-for-patterns.html#while-let-conditional-loops)
+repeats while that result matches `Some`, binding `start` and `ch` for the
+body. Empty input still skips the loop.
+
+Calling `peekable()` wraps our existing iterator with support for inspecting
+the next item before deciding whether to consume it. `chars` is mutable
+because advancing changes its state. Keeping it outside the loop gives both
+the loop condition and the body access to that one sequence of characters.
+
+The initial `end` covers the character we just read. It is now mutable because
+a paired operator can extend it.
+
+## Consume an equals sign only when it matches
+
+Inside `match ch`, replace these two arms:
+
+```rust title="rlox/crates/syntax/src/lib.rs · arms to replace"
+'!' => SyntaxKind::Bang,
+'=' => SyntaxKind::Equal,
+```
+
+with:
+
+```rust title="rlox/crates/syntax/src/lib.rs · replacement operator arms"
+'!' => {
+    if chars.next_if(|&(_, next)| next == '=').is_some() {
+        end += 1;
+        SyntaxKind::BangEqual
+    } else {
+        SyntaxKind::Bang
+    }
+}
+'=' => {
+    if chars.next_if(|&(_, next)| next == '=').is_some() {
+        end += 1;
+        SyntaxKind::EqualEqual
+    } else {
+        SyntaxKind::Equal
+    }
+}
+```
+
+[`next_if`](https://doc.rust-lang.org/std/iter/struct.Peekable.html#method.next_if)
+combines inspection and conditional consumption. It passes the next item to
+a predicate, consumes that item if the predicate returns `true`, and returns
+it in `Some`. A false result leaves the item available and returns `None`.
+At end of input it also returns `None`. `is_some()` turns that result into
+the Boolean our `if` needs.
+
+The predicate `|&(_, next)| next == '='` is a small anonymous function, called
+a **closure**. The bars enclose its parameter pattern; the expression after
+them is its result. `next_if` supplies a reference to the next
+`(byte_offset, character)` pair. The `&` pattern unpacks that reference, `_`
+ignores the offset, and `next` names the copied character. We compare it with
+`'='` without changing the iterator ourselves. The Rust Book introduces
+[closure syntax](https://doc.rust-lang.org/book/ch13-01-closures.html).
+
+When the match succeeds, the extra character is necessarily the ASCII `=`:
+it occupies exactly one byte. `end += 1` extends the range by that byte.
+When it fails, the initial end stays correct. The two branches return the
+appropriate kind, which becomes the value of the surrounding match arm.
+
+Finally, **remove the old immutable `end` declaration after the match**. If
+we kept it, it would replace our extended end with the first character’s end:
+
+```diff title="rlox/crates/syntax/src/lib.rs · after match ch"
+         };
+-        let end = start + ch.len_utf8();
+         let range = TextRange::new(TextSize(start), TextSize(end))
+             .expect("character end follows its start");
+```
+
+The existing range construction and `tokens.push(...)` now use the end that
+the selected arm computed. No import, helper, or manifest change is needed.
+
+## Keep the single-character test single-character
+
+Our original test scans `()!=`. Its last two characters now form one token,
+so its old expectation would be wrong. Keep this test focused on individual
+characters by changing the input to `()=!` and swapping its last two expected
+kinds. `=!` isn’t a paired operator:
+
+```diff title="rlox/crates/syntax/src/lib.rs · scans_single_character_tokens"
+-        let tokens = scan("()!=");
++        let tokens = scan("()=!");
+```
+
+In the third expected `Token`, which has range `[2, 3)`, change
+`SyntaxKind::Bang` to `SyntaxKind::Equal`. In the fourth, with range `[3, 4)`,
+change `SyntaxKind::Equal` to `SyntaxKind::Bang`. Leave their ranges and the
+first two expected tokens alone.
+
+## Check the decisions at token boundaries
+
+Matching a pair is only half the behavior. We also need evidence that failed
+lookahead preserves the next character and that an operator can end the
+source. Add these tests **inside the existing `mod tests`, before its closing
+brace**. Keep its imports and the empty-source and unsupported-character
+tests from 5.1.
+
+```rust title="rlox/crates/syntax/src/lib.rs · append inside mod tests"
+#[test]
+fn scans_adjacent_paired_operators() {
+    assert_eq!(
+        scan("!==="),
+        vec![
+            Token {
+                kind: SyntaxKind::BangEqual,
+                range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::EqualEqual,
+                range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn failed_lookahead_preserves_the_next_character() {
+    assert_eq!(
+        scan("!é("),
+        vec![
+            Token {
+                kind: SyntaxKind::Bang,
+                range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Error,
+                range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::LeftParen,
+                range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn single_operator_can_end_the_source() {
+    for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+        assert_eq!(
+            scan(source),
+            vec![Token {
+                kind,
+                range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+            }]
+        );
+    }
+}
+```
+
+`!===` should become two adjacent tokens: `!=` at `[0, 2)` and `==` at
+`[2, 4)`. This catches a token end that wasn’t extended, as well as an iterator
+that rereads a consumed `=`.
+
+In `!é(`, lookahead after `!` fails. The scanner must still produce an `Error`
+for the complete `é`, followed by `LeftParen`. Consuming the nonmatching
+character would lose the error token; extending the bang’s end anyway would
+give it bytes that don’t belong to it.
+
+The final test loops over two `(source, expected_kind)` pairs. Each input
+ends immediately after its operator, so the attempted second read must leave
+a single-character token. The existing empty-input test also continues to
+check exhaustion before the first character is read.
+
+Run the syntax tests, then the workspace checks:
+
+```sh
+cargo test -p rlox-syntax
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+The named tests should report `ok`, and formatting and Clippy should finish
+successfully. There are no dependency changes, so `Cargo.lock` should stay
+unchanged.
+
+<details>
+<summary>Complete resulting syntax library</summary>
+
+```rust title="rlox/crates/syntax/src/lib.rs · complete resulting file"
+use rlox_text::{TextRange, TextSize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxKind {
+    LeftParen,
+    RightParen,
+    Bang,
+    BangEqual,
+    Equal,
+    EqualEqual,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+
+pub fn scan(source: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+    let mut chars = source.char_indices().peekable();
+
+    while let Some((start, ch)) = chars.next() {
+        let mut end = start + ch.len_utf8();
+        let kind = match ch {
+            '(' => SyntaxKind::LeftParen,
+            ')' => SyntaxKind::RightParen,
+            '!' => {
+                if chars.next_if(|&(_, next)| next == '=').is_some() {
+                    end += 1;
+                    SyntaxKind::BangEqual
+                } else {
+                    SyntaxKind::Bang
+                }
+            }
+            '=' => {
+                if chars.next_if(|&(_, next)| next == '=').is_some() {
+                    end += 1;
+                    SyntaxKind::EqualEqual
+                } else {
+                    SyntaxKind::Equal
+                }
+            }
+            _ => SyntaxKind::Error,
+        };
+        let range = TextRange::new(TextSize(start), TextSize(end))
+            .expect("character end follows its start");
+
+        tokens.push(Token { kind, range });
+    }
+
+    tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextRange, TextSize};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()=!");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source);
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(tokens[0].range.slice(source), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(tokens[1].range.slice(source), Some("!"));
+    }
+
+    #[test]
+    fn scans_adjacent_paired_operators() {
+        assert_eq!(
+            scan("!==="),
+            vec![
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::EqualEqual,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_lookahead_preserves_the_next_character() {
+        assert_eq!(
+            scan("!é("),
+            vec![
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn single_operator_can_end_the_source() {
+        for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                }]
+            );
+        }
+    }
+}
+```
+
+</details>
+
+A token can now span more than one character. `!==` becomes `BangEqual`
+followed by `Equal`: the first pair is consumed, and the third character
+starts the next token. Reading and looking ahead share one iterator, so every
+character is either part of the current token or still available to the next
+iteration.
+
+[Crafting Interpreters’ discussion of operators](https://craftinginterpreters.com/scanning.html#operators)
+explores the same decision. We’ve applied it to two operator families;
+identifiers, whitespace, and comments will give us longer sequences to scan
+next.

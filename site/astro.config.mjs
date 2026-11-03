@@ -44,6 +44,7 @@ export default defineConfig({
           label: '5 · Building a Scanner by Hand',
           items: [
             { label: '5.1 · Read a character, emit a token', link: '/chapter-5/5.1-first-tokens/' },
+            { label: '5.2 · Look ahead before choosing', link: '/chapter-5/5.2-lookahead/' },
           ],
         },
       ],

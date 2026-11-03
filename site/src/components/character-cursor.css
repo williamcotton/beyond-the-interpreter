@@ -50,3 +50,7 @@
   outline-offset: 3px;
 }
 .character-cursor p code { display: inline-block; }
+.character-cursor .character-cursor-cells li[data-inspected='true'] {
+  outline: 2px dotted var(--sl-color-accent-high);
+  outline-offset: 2px;
+}
