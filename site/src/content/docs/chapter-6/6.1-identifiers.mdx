@@ -1,0 +1,434 @@
+---
+title: 6.1 — Let a name grow
+slug: chapter-6/6.1-identifiers
+description: Scan identifiers with separate start and continuation rules while preserving the next token's first character.
+prev:
+  link: /chapter-5/5.2-lookahead/
+  label: 5.2 · Look ahead before choosing
+next: false
+---
+
+import IdentifierCursor from '../../../components/IdentifierCursor';
+
+<p className="book-subtitle">Chapter 6 · Tokens That Grow</p>
+
+Our scanner recognizes operators, but it turns every letter of `other` into
+an `Error` token. A name should hold together. In this source:
+
+```text
+a_2!=other
+```
+
+we want three tokens: `Identifier` for `a_2`, `BangEqual` for `!=`, and another
+`Identifier` for `other`. Unlike a paired operator, a name has no fixed length.
+We’ll keep consuming characters until one no longer belongs to it.
+
+Start from [Section 5.2](/chapter-5/5.2-lookahead/), with your terminal in
+**`rlox/`**. All edits belong to **`rlox/crates/syntax/src/lib.rs`**. We’ll
+reuse its iterator, mutable token end, and existing `Token` representation.
+
+## Starting and continuing are different rules
+
+An identifier starts with an ASCII letter (`a`–`z` or `A`–`Z`) or an
+underscore. Later characters may also be ASCII digits. Thus `_`, `A9`, and
+`a_2` are names, while the `2` in `2a` cannot start one.
+
+This is a rule of the language we’re scanning, not a restriction imposed by
+Rust strings. We’ll use the explicit ASCII tests
+[`is_ascii_alphabetic`](https://doc.rust-lang.org/std/primitive.char.html#method.is_ascii_alphabetic)
+and
+[`is_ascii_alphanumeric`](https://doc.rust-lang.org/std/primitive.char.html#method.is_ascii_alphanumeric)
+to express it. The first recognizes ASCII letters; the second includes ASCII
+digits. We’ll check underscore separately in both places.
+
+After reading the first letter of `a_2!`, the token already covers `[0, 1)`.
+Each successful continuation extends that same range. Step through the
+example and watch the token end grow while its start stays at byte `0`.
+When `!` fails the continuation rule, it must remain unread, just as with
+failed operator lookahead in 5.2.
+
+<IdentifierCursor client:load />
+
+## Choose the identifier arm
+
+Add `Identifier` to `SyntaxKind` before `Error`:
+
+```diff title="rlox/crates/syntax/src/lib.rs · SyntaxKind"
+     EqualEqual,
++    Identifier,
+     Error,
+```
+
+In `scan`, the outer `while let` already reads the first character and sets
+`start` and `end`. We need a match arm that recognizes a valid first character,
+then keeps asking whether the next character can continue the name.
+
+Add this arm **inside `match ch`, immediately before `_ => SyntaxKind::Error`**.
+Keep the existing punctuation and operator arms:
+
+```rust title="rlox/crates/syntax/src/lib.rs · add identifier arm"
+ch if ch.is_ascii_alphabetic() || ch == '_' => {
+    while let Some((offset, next)) =
+        chars.next_if(|&(_, next)| next.is_ascii_alphanumeric() || next == '_')
+    {
+        end = offset + next.len_utf8();
+    }
+    SyntaxKind::Identifier
+}
+```
+
+The pattern `ch` binds the character being matched. The condition after `if`
+is a **match guard**: this arm applies only when the bound character can start
+an identifier. A digit or an unsupported character fails the guard and reaches
+the existing error arm. The Rust Book explains
+[match guards](https://doc.rust-lang.org/book/ch19-03-pattern-syntax.html#extra-conditionals-with-match-guards).
+
+Inside the arm, we repeat the conditional consumption from 5.2. This time,
+[`next_if`](https://doc.rust-lang.org/std/iter/struct.Peekable.html#method.next_if)
+checks the continuation rule. Instead of reducing its result to a Boolean
+with `is_some()`, `while let Some((offset, next))` gives us the pair it consumed.
+The predicate’s `next` names the character being inspected; the loop body’s
+`next` names the character returned after successful consumption.
+
+Each pass updates `end` to the consumed character’s byte offset plus its
+UTF-8 length. We keep the original `start`. When the condition fails, the
+next character stays in the iterator, and the inner loop finishes. If there
+is no next character, it also finishes. Both paths return `Identifier` from
+the arm; the existing code after the match constructs and pushes its token.
+
+No special final-character branch is needed. `other` at the end of the source
+still produces its complete token, and `a_2!` leaves the `!` for the outer
+loop. Even a one-letter name works: its initial range was established before
+the identifier arm ran.
+
+## Check where a name stops
+
+Append these tests **inside the existing `mod tests`, before its closing
+brace**. Keep its imports and all tests from Chapter 5:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append inside mod tests"
+#[test]
+fn identifiers_stop_before_operators() {
+    assert_eq!(
+        scan("a_2!=other"),
+        vec![
+            Token {
+                kind: SyntaxKind::Identifier,
+                range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::BangEqual,
+                range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Identifier,
+                range: TextRange::new(TextSize(5), TextSize(10)).unwrap(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn identifiers_can_end_the_source() {
+    for source in ["_", "A9", "print"] {
+        assert_eq!(
+            scan(source),
+            vec![Token {
+                kind: SyntaxKind::Identifier,
+                range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+            }]
+        );
+    }
+}
+
+#[test]
+fn identifier_rules_preserve_unsupported_characters() {
+    assert_eq!(
+        scan("2aé_b"),
+        vec![
+            Token {
+                kind: SyntaxKind::Error,
+                range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Identifier,
+                range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Error,
+                range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Identifier,
+                range: TextRange::new(TextSize(4), TextSize(6)).unwrap(),
+            },
+        ]
+    );
+}
+```
+
+The first test checks both stopping points: the operator must survive the
+first identifier, and the final name must reach the end of the source. Its
+expected ranges also check that extending a name doesn’t move its start.
+
+The next test covers an underscore-only name, an uppercase start followed
+by a digit, and a word that Lox will eventually recognize as a keyword.
+For now, `print` is an `Identifier`: keyword recognition comes in Chapter 7.
+
+In `2aé_b`, the leading digit remains `Error`; we haven’t implemented numbers.
+The `a` starts a name but stops before `é`, which takes the existing error
+path as one complete character. Scanning then resumes at `_b`. The ranges
+show the two-byte `é` without losing it or absorbing it into either name.
+
+Run the syntax tests, then check the workspace:
+
+```sh
+cargo test -p rlox-syntax
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+The named tests should report `ok`, and formatting and Clippy should finish
+successfully. No manifest or dependency changes are needed; `Cargo.lock`
+should remain unchanged. The CLI still provides its existing `source` command.
+
+<details>
+<summary>Complete resulting syntax library</summary>
+
+```rust title="rlox/crates/syntax/src/lib.rs · complete resulting file"
+use rlox_text::{TextRange, TextSize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxKind {
+    LeftParen,
+    RightParen,
+    Bang,
+    BangEqual,
+    Equal,
+    EqualEqual,
+    Identifier,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+
+pub fn scan(source: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+    let mut chars = source.char_indices().peekable();
+
+    while let Some((start, ch)) = chars.next() {
+        let mut end = start + ch.len_utf8();
+        let kind = match ch {
+            '(' => SyntaxKind::LeftParen,
+            ')' => SyntaxKind::RightParen,
+            '!' => {
+                if chars.next_if(|&(_, next)| next == '=').is_some() {
+                    end += 1;
+                    SyntaxKind::BangEqual
+                } else {
+                    SyntaxKind::Bang
+                }
+            }
+            '=' => {
+                if chars.next_if(|&(_, next)| next == '=').is_some() {
+                    end += 1;
+                    SyntaxKind::EqualEqual
+                } else {
+                    SyntaxKind::Equal
+                }
+            }
+            ch if ch.is_ascii_alphabetic() || ch == '_' => {
+                while let Some((offset, next)) =
+                    chars.next_if(|&(_, next)| next.is_ascii_alphanumeric() || next == '_')
+                {
+                    end = offset + next.len_utf8();
+                }
+                SyntaxKind::Identifier
+            }
+            _ => SyntaxKind::Error,
+        };
+        let range = TextRange::new(TextSize(start), TextSize(end))
+            .expect("character end follows its start");
+
+        tokens.push(Token { kind, range });
+    }
+
+    tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextRange, TextSize};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()=!");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source);
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(tokens[0].range.slice(source), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(tokens[1].range.slice(source), Some("!"));
+    }
+
+    #[test]
+    fn scans_adjacent_paired_operators() {
+        assert_eq!(
+            scan("!==="),
+            vec![
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::EqualEqual,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_lookahead_preserves_the_next_character() {
+        assert_eq!(
+            scan("!é("),
+            vec![
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn single_operator_can_end_the_source() {
+        for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifiers_stop_before_operators() {
+        assert_eq!(
+            scan("a_2!=other"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(5), TextSize(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn identifiers_can_end_the_source() {
+        for source in ["_", "A9", "print"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifier_rules_preserve_unsupported_characters() {
+        assert_eq!(
+            scan("2aé_b"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(4), TextSize(6)).unwrap(),
+                },
+            ]
+        );
+    }
+}
+```
+
+</details>
+
+We can now grow a token by repeatedly applying its continuation rule. The
+scanner still retains every character it doesn’t recognize, but spaces are
+currently errors. Next we’ll give whitespace a kind of its own and keep it
+in the token stream.
+
+[Crafting Interpreters’ discussion of identifiers](https://craftinginterpreters.com/scanning.html#reserved-words-and-identifiers)
+connects these character rules to names and reserved words. Our next library
+transition will add the reserved-word distinction.

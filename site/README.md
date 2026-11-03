@@ -92,3 +92,8 @@ Section 5.2 is drafted at `src/content/docs/chapter-5/5.2-lookahead.mdx`,
 served at `/chapter-5/5.2-lookahead/`. Its lookahead cursor contrasts matching,
 nonmatching, and exhausted input using fixed authored frames. The section, native implementation, and lookahead visual are accepted;
 local checks and native cursor comparisons pass.
+
+Section 6.1 is drafted at `src/content/docs/chapter-6/6.1-identifiers.mdx`,
+served at `/chapter-6/6.1-identifiers/`. Its cursor steps through a growing
+identifier and the character left unread. The section, identifier scanner, and cursor are accepted;
+local checks and native cursor comparisons pass.

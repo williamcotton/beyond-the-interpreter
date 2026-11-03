@@ -47,6 +47,12 @@ export default defineConfig({
             { label: '5.2 · Look ahead before choosing', link: '/chapter-5/5.2-lookahead/' },
           ],
         },
+        {
+          label: '6 · Tokens That Grow',
+          items: [
+            { label: '6.1 · Let a name grow', link: '/chapter-6/6.1-identifiers/' },
+          ],
+        },
       ],
       customCss: ['./src/styles/book.css'],
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },

@@ -300,6 +300,21 @@ Those are reserved for the Logos chapter.
 
 **Checkpoint:** A limited but lossless handwritten scanner and regression corpus.
 
+**Chapter 6 authoring frame (accepted for drafting):** start from accepted 5.2’s scanner, which already retains every character through recognized tokens or Error fallback. Ask how one token can grow across a sequence while preserving that source coverage. Keep the public scanner API and existing crate boundaries.
+
+The user approved starting with 6.1–6.3 along these boundaries; adjust them through actual text review:
+
+- **6.1 — Let a name grow.** Recognize ASCII identifiers: letters/underscore start, letters/digits/underscore continue. Contrast `name_2` with a leading digit and show punctuation remaining for the next token. Add Identifier and repeat conditional consumption while updating the token end. Words such as `print` remain Identifier until Chapter 7; do not add number or keyword handling here.
+- **6.2 — Keep the spaces.** Group Lox whitespace (space, tab, carriage return, newline) into Whitespace tokens. Explain trivia as source text that later grammatical work may ignore but the scanner retains. Show mixed input and exact source reconstruction; introduce the contiguous-range invariant alongside this behavior, rather than as a separate testing lesson.
+- **6.3 — Read a line comment.** Distinguish `/` from `//` using existing lookahead. Add Slash and LineComment only when this distinction needs them; a comment extends to LF or end of input, leaving LF for whitespace scanning. Retain the delimiters and all comment bytes, including CR before LF. Check lone slash, empty comment, comment at EOF, and a following identifier on the next line. Grow the same small regression corpus for the Logos migration.
+
+Maintain one Error token per unsupported Unicode scalar and test continued progress; no new error framework or recovery abstraction. Numbers, strings, keywords, and complete punctuation coverage remain with Logos in Chapter 7. Preserve all bytes and valid UTF-8 boundaries; token ranges must be nonempty, adjacent, ordered, and cover the source exactly (with no tokens for empty source). Test the invariant through existing TextRange equality/slicing and a running byte position, without adding coordinate getters just for the tests.
+
+Visual purpose: show which characters extend an identifier and which remain unread; show whitespace as retained source; contrast a consumed comment body with its unread terminating newline. Reuse the accepted cursor presentation only where stepping clarifies the decision, with small authored observations later checked against native Rust. A static annotated example can explain whitespace preservation; no new visualization framework is proposed.
+
+The endpoint is a deliberately limited scanner plus a reviewed regression corpus ready to carry into Chapter 7. No CLI command, dependency, crate, parser, source database, block comment, or scanner abstraction is required. Detailed edits and exact section boundaries belong to the next text brief and human review.
+
+
 ## Chapter 7 — From Handwritten Scanning to Logos
 
 **Objective:** Replace scanner mechanics with declarative lexical rules.

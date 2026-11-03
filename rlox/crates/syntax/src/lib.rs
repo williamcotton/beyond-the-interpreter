@@ -8,6 +8,7 @@ pub enum SyntaxKind {
     BangEqual,
     Equal,
     EqualEqual,
+    Identifier,
     Error,
 }
 
@@ -41,6 +42,14 @@ pub fn scan(source: &str) -> Vec<Token> {
                 } else {
                     SyntaxKind::Equal
                 }
+            }
+            ch if ch.is_ascii_alphabetic() || ch == '_' => {
+                while let Some((offset, next)) =
+                    chars.next_if(|&(_, next)| next.is_ascii_alphanumeric() || next == '_')
+                {
+                    end = offset + next.len_utf8();
+                }
+                SyntaxKind::Identifier
             }
             _ => SyntaxKind::Error,
         };
@@ -151,5 +160,64 @@ mod tests {
                 }]
             );
         }
+    }
+
+    #[test]
+    fn identifiers_stop_before_operators() {
+        assert_eq!(
+            scan("a_2!=other"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(5), TextSize(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn identifiers_can_end_the_source() {
+        for source in ["_", "A9", "print"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifier_rules_preserve_unsupported_characters() {
+        assert_eq!(
+            scan("2aé_b"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(4), TextSize(6)).unwrap(),
+                },
+            ]
+        );
     }
 }
