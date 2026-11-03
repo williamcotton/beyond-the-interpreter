@@ -4,7 +4,7 @@
 
 An interactive Rust companion to Robert Nystrom’s *Crafting Interpreters*. Readers build `rlox`: two Lox execution engines and the tools to inspect, edit, debug, test, and distribute a language.
 
-The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; tests will enter in Chapter 2 alongside reading source. The current Rust program prints `Hello from rlox!`; its files and behavior match the section. Later chapters describe planned work, not implemented capabilities.
+The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; tests will enter in Chapter 2 alongside reading source. Section 2.1 and its matching Rust endpoint are accepted. The current program prints the supplied filename. Later chapters describe planned work, not implemented capabilities.
 
 ## Read the book locally
 
@@ -16,7 +16,7 @@ npm ci
 npm run dev
 ```
 
-Open Astro’s Local URL, normally <http://localhost:4321/>. [Section 1.1](http://localhost:4321/foundations/a-third-lox/first-program/) is linked from the introduction. See [site/README.md](site/README.md) for Node/npm prerequisites and site checks.
+Open Astro’s Local URL, normally <http://localhost:4321/>. [Section 1.1](http://localhost:4321/chapter-1/1.1-first-program/) is linked from the introduction. See [site/README.md](site/README.md) for Node/npm prerequisites and site checks.
 
 ## Run the current Rust program
 
@@ -24,16 +24,16 @@ With Rust 1.85 or newer installed, from the repository root:
 
 ```sh
 cd rlox
-cargo run
+cargo run -- hello.lox
 ```
 
 Expected program output:
 
 ```text
-Hello from rlox!
+hello.lox
 ```
 
-The local endpoint was verified using rustc and Cargo 1.95.0 on macOS. Formatting, Clippy, and Cargo test passed; there are no Rust test cases yet. Direct execution established the greeting behavior. Fresh installation and other platforms have not been tested.
+The local endpoint was verified using rustc and Cargo 1.95.0 on macOS. Formatting, Clippy, and Cargo test passed; there are no Rust test cases yet. The ordered Section 2.1 route and direct execution established filename selection, quoted spaces, ignored extra arguments, the intentional missing-input panic, and recovery. The named file need not exist; file reading comes later. Fresh installation and other platforms have not been tested.
 
 ## How we work
 

@@ -94,6 +94,16 @@ Introduce the first tests alongside source-reading behavior and useful input err
 
 **Checkpoint:** The executable reads `.lox` files and handles missing files, with meaningful tests for the behavior introduced in this chapter.
 
+**Working section frame:** accepted for drafting after the user requested small code increments. These boundaries remain adjustable through review of the actual text:
+
+- **2.1 — Give the program a filename:** select/display one positional argument in main; explain Cargo’s separator, iteration, Option, and temporary missing-input handling. No file I/O yet.
+- **2.2 — Read the source:** add one file-read operation and source output, plus a small Lox example. Teach String/borrowing and Result at their use.
+- **2.3 — Explain input failures:** replace temporary panics with useful stderr and failure status; put the one-filename/no-extra-arguments rule in a small function in the same binary.
+- **2.4 — Check the input rules:** add unit tests to that argument-policy function and demonstrate a regression/restoration. Keep manual filesystem/CLI checks distinct from what these tests prove. Formatting is supporting material.
+
+No process-testing framework, dependency, library extraction, or fixed later-section schedule is required by this frame.
+
+
 ## Chapter 3 — Commands and Clap
 
 **Objective:** Evolve the CLI from a single positional argument to commands.

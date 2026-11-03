@@ -12,7 +12,13 @@ export default defineConfig({
         {
           label: '1 · A Third Lox',
           items: [
-            { label: '1.1 · A program we can run', link: '/foundations/a-third-lox/first-program/' },
+            { label: '1.1 · A program we can run', link: '/chapter-1/1.1-first-program/' },
+          ],
+        },
+        {
+          label: '2 · Reading Source',
+          items: [
+            { label: '2.1 · Give the program a filename', link: '/chapter-2/2.1-filename/' },
           ],
         },
       ],

@@ -4,8 +4,8 @@ Last updated: 2026-11-02. This file records actual state and decisions, not futu
 
 ## Accepted work
 
-- **SITE-01 — Local site and introduction.** Accepted when the user said “ok, looks good” before requesting the initial commits. The introduction is [index.mdx](../site/src/content/docs/index.mdx), served at <http://localhost:4321/>. It is the accepted orientation/style reference.
-- **CH01-01 — Chapter 1, Section 1: A program we can run.** The user approved the text with “this is great, let’s follow the instructions now.” After the implementation report, the user said “I’m happy with what we’ve done so far” and requested this reconciliation. The [section](../site/src/content/docs/foundations/a-third-lox/first-program.mdx) and matching [Rust source](../rlox/src/main.rs) are accepted as the first executable endpoint. Local page: <http://localhost:4321/foundations/a-third-lox/first-program/>.
+- **SITE-01 — Local site and introduction.** Accepted when the user said “ok, looks good” before requesting the initial commits. The introduction is [introduction.mdx](../site/src/content/docs/introduction.mdx), served at <http://localhost:4321/>. It is the accepted orientation/style reference.
+- **CH01-01 — Chapter 1, Section 1: A program we can run.** The user approved the text with “this is great, let’s follow the instructions now.” After the implementation report, the user said “I’m happy with what we’ve done so far” and requested this reconciliation. The [section](../site/src/content/docs/chapter-1/1.1-first-program.mdx) and matching [Rust source](../rlox/src/main.rs) are accepted as the first executable endpoint. Local page: <http://localhost:4321/chapter-1/1.1-first-program/>.
 
 **Chapter 1 complete:** the user explicitly chose to keep only Section 1.1, omit dedicated Git/README sections, and introduce tests in Chapter 2. The accepted Rust endpoint still has no test cases.
 
@@ -13,8 +13,8 @@ Section 1.1 demonstrates a code introduction, a meaningful one-line edit, comple
 
 ## Actual repository and capabilities
 
-- `site/`: Astro/Starlight publication with MDX, React integration, and strict TypeScript. The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; the proposed Section 1.2 was removed after scope review. Navigation covers only the introduction and Section 1.1. Starlight supplies listings and a focused diff; no custom diff viewer or trace framework exists.
-- `rlox/`: one binary package named `rlox`, Rust edition 2024, no external dependencies. It prints `Hello from rlox!`. Files are Cargo.toml, Cargo.lock, src/main.rs, and .gitignore. It does not read files, parse arguments, scan tokens, or execute Lox. There are zero Rust test cases.
+- `site/`: Astro/Starlight publication with MDX, React integration, and strict TypeScript. The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; the proposed Section 1.2 was removed after scope review. Section 2.1 and its matching Rust endpoint are accepted; navigation adds only that current Chapter 2 page. Starlight supplies listings and a focused diff; no custom diff viewer or trace framework exists.
+- `rlox/`: one binary package named `rlox`, Rust edition 2024, no external dependencies. It selects and prints the first supplied filename. Missing input intentionally panics; extra arguments are ignored at this lesson endpoint. Files are Cargo.toml, Cargo.lock, src/main.rs, and .gitignore. It does not read files, validate extra arguments, scan tokens, or execute Lox. There are zero Rust test cases.
 - `authoring/`: current roadmap, architecture, review guidance, status, and brief. No fixtures/replay framework or future crate scaffold exists.
 - Hosted CI, deployment, release artifacts, distribution, and cross-platform coverage: not established.
 
@@ -42,7 +42,7 @@ These are records of accepted-endpoint checks. The current section’s manuscrip
 ## Development history
 
 - DOCS-01/DOCS-02 consolidated restart guidance and carried forward pacing, meaningful-diff, first-use-visual, and chronological-reader-route lessons from the old attempt. Earlier implementation/completion claims never transferred. Their document organization is superseded by DOCS-03; they are not active pending assignments.
-- Authorized initial commits: `066063b` (root Markdown) and `8b52cb7` (site and ignore rules). Section 1.1, navigation, and its matching Rust endpoint were committed together as `db100b7`. The reconciled guidance was committed separately as `ac27e2e`. Nothing pushed or published.
+- Authorized initial commits: `066063b` (root Markdown) and `8b52cb7` (site and ignore rules). Section 1.1, navigation, and its matching Rust endpoint were committed together as `db100b7`. The reconciled guidance was committed separately as `ac27e2e`. Chapter 1 closeout and the accepted Chapter 2 section frame were committed as `b1d38da` before beginning Chapter 2 prose. Nothing pushed or published.
 
 ## DOCS-03 — Reconcile guidance and move it into authoring
 
@@ -76,14 +76,38 @@ The user rejected the proposed greeting-process-test section as offering too lit
 
 **Authorization:** the user explicitly requested section planning for Chapter 2 and asked not to change too much code per section. This is planning, not authorization to draft or implement the chapter.
 
-**Status:** Accepted as the working frame when the user asked to commit it and create Chapter 2. The frame records four adjustable boundaries: filename selection; source reading; helpful failures and argument policy; unit tests for that policy. Sections may be revised through actual text review; no permanent section count or file/line quota is established.
+**Status:** Accepted as the working frame when the user asked to commit it and create Chapter 2. The roadmap retains four adjustable boundaries: filename selection; source reading; helpful failures and argument policy; unit tests for that policy. Sections may be revised through actual text review; no permanent section count or file/line quota is established.
 
 **Scope rationale:** give source reading an early observable payoff; replace temporary `expect` handling before the chapter endpoint; test actual input rules with unit tests rather than introducing greeting-only process infrastructure. Keep arguments, file I/O, failure behavior, and testing as distinct changes. A source example is the only proposed new non-Rust file; production code stays in the small binary without a crate split or dependency.
 
 **Evidence and limits:** inspected current main/manifest and Chapter 2 roadmap. Reviewed prerequisites, explicit temporary failure behavior/recovery, test scope, and chapter boundaries. No code, MDX, dependencies, runtime behavior, or checks changed. Reader commands, helper signature, and test details remain to be authored and verified through the text-first loop.
 
+## CH02-01 — Give the program a filename
+
+**Authorization:** the user asked to commit the preceding changes, then create Chapter 2. Completed that commit as `b1d38da` first, then began Section 2.1 under the existing one-section-at-a-time workflow. The accepted working section frame is now retained in the roadmap while the brief scopes the current section.
+
+**Status:** Accepted when the user said “looks great, but before we commit” and requested the content-path reorganization. The text, matching Rust, and ordered reader route are complete. The subsequent site reorganization is recorded below.
+
+**Scope:** one MDX page at `site/src/content/docs/chapter-2/2.1-filename.mdx`, Chapter 2 sidebar group, forward/back navigation, and author records. Includes a small main-only change to select/display the filename, explicit temporary missing-input panic, quoted-space and extra-argument cases, and recovery. No file I/O, test, dependency, custom component, or algorithm visual.
+
+**Checks observed:** current official Rust Book command-line, Cargo run, args, nth, and Option::expect documentation checked; both reader reference links resolve. `npm run check` reported zero diagnostics and `npm run build` succeeded with the existing optional-content/sitemap notices. Three local routes return HTTP 200 and navigation/anchors resolve. The complete displayed source matches the MDX text; the focused diff’s before view matches accepted main.rs and its after view matches the complete listing. This was text consistency validation, not Rust execution. Safari inspection sampled the desktop opening/diff/explanation and a 390 × 844 responsive viewport. At text handoff all four Rust files matched HEAD and the proposed commands had not been executed. The subsequent implementation evidence follows below.
+
+**Implementation checks:** followed the manuscript in order: ran the greeting with a filename before editing, applied precisely the displayed main-only edit, ran ordinary, quoted-space, and extra-argument cases, observed the intentional missing-argument panic (exit 101 with `expected a file`), then recovered by supplying the filename. All results matched; no manuscript correction was needed. The unquoted-space prediction also matched (`my`). Independent direct-executable checks confirmed exact successful stdout/newlines, empty stderr, and exit 0; the missing-input case had empty stdout, the expected stderr message, and exit 101. Main matches the complete MDX listing byte for byte. Cargo.toml, Cargo.lock, and .gitignore still match HEAD; hello.lox does not exist and was not needed. Formatting, Clippy with warnings denied, and Cargo test passed (zero cases). Checks used the existing macOS toolchain; no other-platform claim. The manuscript was unchanged, so its prior rendered checks remain applicable.
+
+**Review focus:** the rendered explanation and matching filename-selection behavior, including the deliberately temporary missing-input handling. Chapter 1 remains reconstructible through its complete listings. The section, Rust edit, and author records remain uncommitted; no later section has been started.
+
+## SITE-02 — Numbered chapters and descriptive section paths
+
+**Authorization:** after accepting Section 2.1, the user requested chapter/section-based content paths and renaming index.mdx to introduction.mdx before committing. The user subsequently approved a blend: numbered chapter directories, with section numbers and short descriptions in filenames. The user later accepted the completed reorganization (“great”) and explicitly requested committing all current work. No later lesson is authorized.
+
+**Changes:** content now lives at `introduction.mdx`, `chapter-1/1.1-first-program.mdx`, and `chapter-2/2.1-filename.mdx`. Section URLs match those paths; future filenames follow `chapter-N/N.M-short-description.mdx`. Navigation, manuscript links, README files, and author records point to the new paths. Descriptive page titles remain. The introduction uses the documented Starlight slug override (`slug: index`) to retain the home URL `/`. No Rust or instructional content changed during this reorganization.
+
+**Status:** Accepted when the user said “great, let’s commit all of this now.” Commit closeout is authorized.
+
+**Checks observed:** `npm run check` reported zero diagnostics; `npm run build` generated `/`, `/chapter-1/1.1-first-program/`, and `/chapter-2/2.1-filename/`. All three served routes return HTTP 200, with local links and anchors resolving. Explicit section slugs preserve dots that automatic slug generation would otherwise remove. Source search found no stale title-based or section-1 paths. Safari desktop inspection confirmed the Section 2.1 opening and navigation render correctly. Manuscript comparison confirmed only links and routing frontmatter changed; Rust was unchanged by this reorganization. `git diff --check` passed. Existing optional-content/sitemap and npm user-config notices remain. Nothing committed or published.
+
 ## Handoff
 
-The user authorized committing the Chapter 1 closeout and Chapter 2 frame, then creating Chapter 2. Start with Section 2.1’s manuscript under the established one-section-at-a-time workflow. Preserve the accepted Chapter 1 Rust endpoint until that text is approved and following its instructions is authorized. No Rust, later-section prose, push, or publication is authorized by this handoff.
+Accepted starting point: Section 2.1 and its matching filename-selection Rust endpoint. The numbered chapter directories, numbered/descriptive section filenames, and introduction rename are also accepted. Current authorized action: commit all accepted pending changes and verify the resulting working tree. No unfinished lesson or site corrections remain. After commit closeout, await the next assignment; do not begin Section 2.2. No push or publication is authorized.
 
 **Status meanings:** Proposed = described but not authorized; In progress = authorized work underway; Ready for review = delivered evidence awaiting user judgment, with phase stated; Revision requested = current work remains active; Accepted = explicit user approval with conversation evidence recorded.

@@ -24,6 +24,7 @@ Text approval is not evidence of Rust correctness or final lesson acceptance. Ke
 - Preserve the chapter roadmap’s titles and order unless an explained prerequisite or pacing problem leads to an agreed change. Plan by purpose and boundaries; discover section boundaries through actual writing and human review. Do not prescribe section counts, size quotas, or a full section backlog.
 - If a missing prerequisite, destructive transition, or material expansion emerges, explain the evidence and propose a bounded adjustment before dependent work. Continue unaffected authorized work where useful.
 - Commit only when authorized. Never push, publish, or deploy without explicit authorization. Preserve unrelated changes and accepted lesson states.
+- Match the established commit message style: a lowercase type followed by a colon and a concise, lowercase imperative summary, such as `feat: pair section 1.1 with the first rlox executable` or `docs: consolidate authoring guidance`. Use `feat:` for new capabilities, `fix:` for corrections, and `docs:` for documentation-only changes. Check recent commit subjects before composing a message.
 
 ## Teaching and architecture
 
