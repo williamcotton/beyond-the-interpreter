@@ -1,0 +1,191 @@
+---
+title: 4.4 — Run the checks automatically
+slug: chapter-4/4.4-ci
+description: Run the Rust workspace's formatting, lint, and test checks on GitHub Actions.
+prev:
+  link: /chapter-4/4.3-workspace/
+  label: 4.3 · Extract the workspace
+next: false
+---
+
+<p className="book-subtitle">Chapter 4 · Source Locations, Workspaces, and CI</p>
+
+Our workspace checks pass when we remember to run them. A change sent to a
+shared repository should get those checks too. We’ll add **continuous
+integration**, or **CI**: GitHub will check out a revision of the project on
+its own runner and execute the same commands.
+
+Start from [Section 4.3](/chapter-4/4.3-workspace/). In **`rlox/`**, run:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+Formatting and Clippy should finish successfully, and the named workspace
+tests should report `ok`. These are the checks we’ll automate.
+
+## Use the Rust workspace as your repository
+
+Continue in the directory containing `Cargo.toml`, `Cargo.lock`, `crates/`,
+and `hello.lox`. We’ve been calling this directory `rlox/`. For the reader’s
+project in this section, it is also the **Git repository root**; it doesn’t
+need a particular parent folder.
+
+The hosted steps require this Rust project to be a Git repository connected
+to your own GitHub repository. If you haven’t set that up, follow GitHub’s
+[existing-project setup](https://docs.github.com/en/migrations/importing-source-code/using-the-command-line-to-import-source-code/adding-locally-hosted-code-to-github)
+from this Rust workspace directory first. Then check:
+
+```sh
+git rev-parse --show-toplevel
+git remote -v
+```
+
+The first command should name the directory containing the workspace’s
+`Cargo.toml`. The second should show your GitHub remote. We’ll keep all the
+remaining commands in that directory.
+
+GitHub Actions finds workflows in **`.github/workflows/` at the Git repository
+root**. For this project, create that directory alongside `Cargo.toml` and
+`crates/`.
+
+A **workflow** is the configuration GitHub runs when an event occurs. Ours
+will respond to pushes and pull requests. It has one **job**, which runs on
+an Ubuntu machine, and a sequence of named **steps**. A step can invoke an
+action with `uses`, or execute shell commands with `run`.
+
+The first step must check out our repository so the files exist. The shell
+steps then run at its root, where the virtual workspace manifest lives.
+
+Create **`.github/workflows/ci.yml`**, including its parent directories, with
+this complete content:
+
+```yaml title=".github/workflows/ci.yml · complete file"
+name: Rust CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Workspace checks
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace
+```
+
+YAML uses indentation to nest settings. Here, `checks` is the job identifier;
+`Workspace checks` is its display name. The `steps` list runs in order. The
+[workflow syntax reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)
+describes these keys.
+
+## Give the checks the environment they need
+
+`actions/checkout` copies the revision associated with the event into the
+runner’s workspace. The full commit reference fixes the action code we use;
+the comment names the verified
+[v7.0.1 release](https://github.com/actions/checkout/releases/tag/v7.0.1).
+`contents: read` grants repository-reading permission, and
+`persist-credentials: false` avoids leaving checkout credentials available
+for later Git commands. The job only needs to read code and run checks.
+GitHub’s [secure-use guidance](https://docs.github.com/en/actions/reference/security/secure-use)
+explains scoped permissions and commit-pinned actions.
+
+The [Ubuntu runner image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
+includes rustup. Our setup step uses it to select the stable toolchain and
+ensure rustfmt and Clippy are available. The
+[minimal profile](https://rust-lang.github.io/rustup/concepts/profiles.html)
+installs the compiler, standard library, and Cargo; the component flags add
+the two tools our checks require. These setup commands run on the GitHub
+runner. The version commands make its toolchain visible in the job log;
+stable can advance over time.
+
+The `|` after `run` introduces a multiline shell script. Each of the later
+checks gets its own step so the run identifies whether formatting, linting,
+or testing failed.
+
+The checkout places `Cargo.toml` and `Cargo.lock` at the runner’s repository
+root, where the shell steps execute. The build starts from the dependency
+versions recorded in that lockfile.
+
+## Send the workflow with the source
+
+A local YAML file hasn’t run on GitHub yet. Before sending it, confirm that
+the workflow contains the exact commands that passed locally and that its
+path is `.github/workflows/ci.yml` at the repository root.
+
+When you’re ready to send this revision to your own GitHub repository, commit
+the Rust workspace and workflow together. From the repository root:
+
+```sh
+git add Cargo.toml Cargo.lock crates .gitignore hello.lox .github/workflows/ci.yml
+git commit -m "ci: check the rust workspace"
+git push -u origin HEAD
+```
+
+The `.gitignore` rule keeps the generated `target/` directory out of the
+commit; the root workspace manifest, member manifests, source, and lockfile
+belong in it. `HEAD` selects your current branch for the push.
+
+This workflow has no branch filter: a pushed branch triggers it, and pull
+request events trigger it too. Pushing and opening a pull request can therefore
+produce separate runs of the same checks.
+
+In GitHub, open the repository’s **Actions** tab, select **Rust CI**, then
+open the run associated with the commit you just pushed. Open the **Workspace
+checks** job and inspect its named steps. GitHub’s
+[workflow-run guide](https://docs.github.com/en/actions/how-tos/monitor-workflows/using-workflow-run-logs)
+shows where those logs and results appear.
+
+The checkout and setup steps should succeed, then formatting, Clippy, and
+tests should all pass. Check that the run’s commit matches the revision you
+pushed, then inspect each check’s result.
+
+## Follow a failure back to its command
+
+If the job fails, open the first failing step’s log. A formatting failure
+points to files rustfmt would change. A Clippy failure includes a lint and
+source location. A test failure names the failing test and shows its diagnostic.
+
+In your Rust repository root, run the failing step’s command. For example,
+a test failure calls for:
+
+```sh
+cargo test --workspace
+```
+
+Correct the reported problem and rerun the local checks. If the result differs
+from GitHub, compare the toolchain versions printed during setup and the
+runner’s operating system with your local environment. Commit the correction
+and push it, then inspect the new run for that commit. A failed check needs a
+passing rerun to establish recovery; editing the workflow alone doesn’t show
+that it worked.
+
+We now have one shared set of Rust workspace checks, run locally and configured
+for GitHub. Once the hosted job passes, the coordinate library and CLI have an
+automated check at the boundary where changes enter the repository.

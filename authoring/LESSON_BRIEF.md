@@ -1,27 +1,37 @@
 # Current assignment
 
-## CH04-03 — Extract the workspace (combined review)
+## CH04-04 — Run the checks automatically (implementation and hosted verification)
 
-**Status:** Accepted; commit closeout authorized.
+**Status:** Local implementation verified; authorized commit/push and hosted verification in progress.
 
-**Authorization:** the user accepted 4.2 and requested a commit followed by 4.3. Committed the accepted text/library and supporting records as `7ca9e6f` (`feat: pair section 4.2 with source file origins`) before drafting. The user subsequently approved the text (“ok, looks good”) and explicitly requested updating rlox.
+**Authorization:** the user accepted 4.3 and requested committing it before 4.4. Accepted endpoint committed as `13c8e8e` (`feat: pair section 4.3 with app and text workspace`). During drafting, the user identified the reader/repository-root mismatch and approved separating the reader’s Rust repository from this book’s monorepo. The user confirmed our workflow belongs at this repository root, approved the text, and explicitly requested updating the codebase, pushing to origin, and observing CI from the CLI.
 
-**Reader question:** how do we give the working CLI and text library their own packages while keeping one place to build/run/check them?
+**Reader question:** how can the same workspace checks run on a GitHub revision and show what failed?
 
-**Starting point:** one rlox package, main.rs and lib.rs, Clap 4.6.7, six library tests/five binary tests, root lockfile/ignore/hello.lox. Complete 3.2 and 4.2 source listings preserve this accepted endpoint.
+**Scope:** manuscript at `site/src/content/docs/chapter-4/4.4-ci.mdx`, navigation and records. Propose one GitHub Actions job: checkout, stable Rust with rustfmt/Clippy, formatting, workspace Clippy, workspace tests. Keep Rust sources, manifests, lockfile, and CLI unchanged. No CI caches, matrix, deployment, artifacts, or extra helper scripts.
 
-**Scope:** page at `site/src/content/docs/chapter-4/4.3-workspace.mdx`, navigation and records. Move unchanged sources into crates/app/src/main.rs and crates/text/src/lib.rs; create complete rlox-app/rlox-text manifests; replace root manifest with virtual workspace and resolver 3. Keep executable rlox, root fixture/ignore/lockfile/target, CLI behavior, source API, and all existing tests. Move Clap declaration unchanged into app; no unused app-to-text dependency.
+**Root distinction (agreed):** the reader’s Rust workspace directory is their Git repository root. Their workflow is `.github/workflows/ci.yml` beside Cargo.toml and crates/, with shell steps at that root; no cd .. or working-directory: rlox. Our book repository contains site/, authoring/, and rlox/; its actual workflow will instead be `/Users/williamcotton/Projects/beyond-the-interpreter/.github/workflows/ci.yml` with this job setting:
 
-**Teaching sequence:** baseline tests/CLI; show resulting tree; make exact source moves from rlox/ (macOS/Linux commands or equivalent editor moves); finish grouped child/root manifest edits before Cargo; cargo check --workspace updates local-package lock records; check implicit and explicit root run commands, help, per-package and workspace tests, formatting/Clippy, missing-file failure and recovery. Provide complete child/root manifests and unchanged resulting source views. No Cargo new command or generated scaffolding to overwrite working code.
+```yaml
+defaults:
+  run:
+    working-directory: rlox
+```
 
-**New concepts:** package versus binary/library target, virtual workspace/members, explicit binary name/path, Rust library name normalization, resolver selection matching edition 2024, membership versus dependency edges, package/target selection, shared lockfile/target directory. No Rust algorithm/visibility change; existing pub types and super test imports move unchanged. Dependency version/features remain accepted values.
+That is the sole authoring-layout adaptation to the reader workflow. Document and verify this difference explicitly during implementation; do not put an inert workflow under rlox/.github or teach the book’s folder layout as a reader prerequisite. Our accepted code already supplies the workspace-root reader checks.
 
-**Important route contract:** all commands run from rlox/. Source arguments stay relative to that current directory, including when -p selects a member. Keep existing Cargo.lock and let Cargo update local package entries; registry versions remain locked. No default-members restriction; default virtual-root selection covers both members, and the sole binary remains runnable without -p. The implementation pass verified this behavior.
+**Workflow choices for review:** ubuntu-24.04 hosted image; actions/checkout v7.0.1 pinned to verified official commit 3d3c42e5aac5ba805825da76410c181273ba90b1; contents: read; persist-credentials: false. Rustup is present in the current official image; install/select stable with minimal profile plus rustfmt/clippy and print versions in job logs. Setup runs on the GitHub runner, not the user’s local machine. Current official action/release/tag, runner-image, syntax, secure-use, and rustup docs checked. No compiler pin or new Rust dependency.
 
-**Visual approach:** a static file tree answers where each file goes. Complete code is folded separately from the move instructions; no unchanged code rendered as removals/additions. Existing components only; no routine browser/screenshots.
+**Teaching route:** rerun known checks locally; confirm reader workspace Git root/remote (link precise setup prerequisite); create complete workflow; explain events/job/steps/setup and read permission; commit/push reader’s source and workflow to their own GitHub repo; inspect exact commit’s Actions job/logs; reproduce a failing command and recover if needed. No deliberately broken push or forced failure is needed. Complete YAML is the lesson artifact.
 
-**Checks observed:** current official Cargo workspace/run/target/resolver references checked; all four reader reference URLs/fragments resolve. All three manifest listings parse and match the intended members/targets/dependency placement. Both full source views exactly match accepted 4.2 files. Site check reported zero diagnostics and build succeeded with existing optional-content/sitemap notices. Eleven local routes and their links/anchors resolve. All six rlox files match HEAD and no crates directory exists; git diff --check passed. No browser/screenshots. These were text-phase checks. The authorized implementation pass followed the entire route in order: baseline tests/CLI, exact moves and all three manifests, workspace check, implicit/explicit root runs and help, member tests, workspace tests/formatting/Clippy, read failure and recovery. All matched. Five manifests/source files match their complete listings; both sources are byte-identical to the accepted originals. Only local package records changed in Cargo.lock; registry entries are identical. Metadata confirms two default members, shared target, rlox binary/rlox_text library names, and intended dependencies. No nested lockfiles. Direct execution confirms source/help/error stdout/stderr/status behavior. Six text tests and five app tests pass. No manuscript corrections or repeated site/browser checks. Existing macOS toolchain only; other platforms unverified.
+**Verification boundaries:** text phase checks YAML syntax/declared steps, action SHA/release provenance, documentation/links, site check/build, and unchanged actual Rust/workflow state. Text approval has now been followed by local implementation. After implementation authorization, write our adapted root workflow, validate the sole layout difference, run local checks, and prepare the concrete result for review. The current user request supplies explicit commit/push authorization. Only an observed passing run establishes hosted CI success.
 
-**Excluded:** Rust behavior/API changes, new dependency versions or path edges, new tests/fixtures, future crates, workspace metadata inheritance, CI (4.4), Git push/publication, commits, 4.4 drafting.
+**Checks observed:** reader YAML parses with the existing site YAML parser; events, permission, checkout pin/input, runner, root directory, Rust setup, and all three exact check commands match the intended configuration. Confirmed official v7.0.1 tag/commit and runner/toolchain documentation; all seven reader reference URLs/fragments resolve. Site check reported zero diagnostics and build succeeded with existing optional-content/sitemap notices. Twelve local routes return HTTP 200 and local links/anchors resolve. All tracked rlox files match HEAD. Neither root nor nested actual CI workflow exists; no proposed Rust/check/setup/publication commands executed. git diff --check passed; no browser/screenshots. Hosted behavior and reader commit/push route remain unverified.
 
-**Stopping point:** the user accepted 4.3 (“great”) and requested committing it before 4.4 text. Commit the accepted endpoint before drafting; no push or publication authorized.
+**Visual approach:** existing workflow listing and named job/step logs suffice; no custom UI or routine browser/screenshots.
+
+**Implementation observed:** created .github/workflows/ci.yml at our repository root. YAML parses; removing the agreed defaults.run.working-directory: rlox makes its parsed structure identical to the reader workflow. Local formatting, workspace Clippy with warnings denied, and all eleven tests pass. Rust sources/manifests/lockfile remain unchanged; no local Rustup/default-toolchain changes. CLI authentication and remote access confirmed. The current request authorizes the lesson/workflow commit, origin push, CI observation, and necessary corrections within this scope.
+
+**Excluded:** deployment, unrelated repository/remote changes, local global-toolchain changes, Chapter 5 authoring.
+
+**Stopping point:** push the concrete section/workflow changes, observe the CI run for that commit, resolve failures within scope, and deliver as Ready for combined review with actual hosted evidence. Do not begin Chapter 5.

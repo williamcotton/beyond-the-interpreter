@@ -14,6 +14,8 @@ The thin VS Code extension registers Lox, supplies basic lexical highlighting, a
 
 Use `site/` for the publication, `rlox/` for reader code, and `authoring/` for author-only support. The eventual Cargo workspace lives under `rlox/`; crates live under `rlox/crates/`, with the editor extension under `rlox/editors/vscode/`. The accepted starting package is named `rlox` and lives directly under `rlox/`. At the justified workspace extraction, internal packages use `rlox-*` and the app continues to expose the `rlox` executable. Explain and show that migration rather than rewriting the accepted starting point.
 
+The `site/`, `authoring/`, and `rlox/` arrangement describes this book’s authoring repository. A reader can use the Rust workspace itself as their Git repository root; lesson paths beginning `rlox/` identify that workspace directory, not a required parent repository. Teach the reader’s CI workflow beside their workspace Cargo.toml. Our authoring workflow belongs at the book repository’s root `.github/workflows/`, with Cargo steps explicitly working in `rlox/`.
+
 Create each crate only when its responsibility becomes useful and explain the extraction. Clear modules may precede a crate. This is the intended destination map; changes require an explicit rationale rather than silently discarding the plan.
 
 - **app**: executable entry point, command dispatch, filesystem/process interaction, and terminal presentation. It assembles services; it does not own language algorithms.
