@@ -1,0 +1,864 @@
+---
+title: 7.3 — Tell keywords from names
+slug: chapter-7/7.3-keywords
+description: Distinguish reserved words from identifiers and retrieve their original spelling through source ranges.
+prev:
+  link: /chapter-7/7.2-punctuation/
+  label: 7.2 · Complete the punctuation
+next: false
+---
+
+<p className="book-subtitle">Chapter 7 · From Handwritten Scanning to Logos</p>
+
+Our scanner currently gives `print` and `printer` the same kind:
+`Identifier`. They both fit the character rules for a name, but Lox reserves
+`print` for the language itself. We need its own kind while keeping `printer`
+as an ordinary identifier.
+
+Start from [Section 7.2](/chapter-7/7.2-punctuation/), with your terminal in
+**`rlox/`**. All edits belong to **`rlox/crates/syntax/src/lib.rs`**. We’ll
+add keyword patterns to the existing enum and keep its identifier rule.
+
+## A kind and a spelling are different information
+
+A token’s kind describes its category. Its range describes where the source
+spells it. For the source `print printer`, our target stream is:
+
+```text title="Kinds, locations, and original spellings"
+Print       [0, 5)   "print"
+Whitespace  [5, 6)   " "
+Identifier  [6, 13)  "printer"
+```
+
+Where is the identifier’s actual text? It’s still in the original source.
+Given that source and the last token, `token.range.slice(source)` returns
+`Some("printer")`. The same method retrieves `"print"` from the keyword token
+and the space from the whitespace token.
+
+`Token` doesn’t need a separate string field for each piece. The caller keeps
+the source, and the range lets us borrow the original characters when needed.
+Use the source the tokens were scanned from: offsets alone don’t remember
+which string they describe.
+
+The returned `&str` is a **borrowed slice**, usable while its source remains
+available. The Rust Book’s
+[string slices discussion](https://doc.rust-lang.org/book/ch04-03-slices.html#string-slices)
+explains that relationship. Our `TextRange::slice` also checks the bounds and
+UTF-8 boundaries, which is why it returns `Option<&str>`.
+
+An identifier’s kind can therefore stay the simple `Identifier` variant while
+its spelling varies. Later consumers can ask for that spelling through the
+range. We’ll check this explicitly after adding the keyword rules.
+
+## Give reserved words their own kinds
+
+Lox has sixteen reserved words. Add these variants **inside `SyntaxKind`,
+immediately before the existing `#[regex(r"[A-Za-z_][A-Za-z0-9_]*")]`
+attribute on `Identifier`**:
+
+```rust title="rlox/crates/syntax/src/lib.rs · insert before Identifier"
+#[token("and")]
+And,
+#[token("class")]
+Class,
+#[token("else")]
+Else,
+#[token("false")]
+False,
+#[token("for")]
+For,
+#[token("fun")]
+Fun,
+#[token("if")]
+If,
+#[token("nil")]
+Nil,
+#[token("or")]
+Or,
+#[token("print")]
+Print,
+#[token("return")]
+Return,
+#[token("super")]
+Super,
+#[token("this")]
+This,
+#[token("true")]
+True,
+#[token("var")]
+Var,
+#[token("while")]
+While,
+```
+
+Each `#[token]` matches the exact lowercase spelling. Leave `Identifier`’s
+regex, all punctuation and trivia rules, `Error`, and the adapter unchanged.
+The new kinds make the reserved words available to later grammar rules.
+
+## Let the whole word decide
+
+Both `#[token("for")]` and the identifier regex can match the complete input
+`for`. Logos prefers the specific fixed spelling, giving us `For`.
+
+For `forest`, however, the identifier rule matches the longer word. The
+result is one `Identifier`, rather than `For` followed by another token.
+Similarly, `printer` and `true_value` remain whole names. Logos’s
+[disambiguation rules](https://logos.maciej.codes/token-disambiguation.html)
+cover these length and specificity choices; no separate keyword lookup or
+manual priority value is needed here.
+
+Matching is case-sensitive. `Print` remains an identifier because it differs
+from the lowercase keyword. `_if` is also an identifier: containing keyword
+letters doesn’t make the entire spelling a reserved word.
+
+## Update the identifier-only example
+
+In 6.1 we deliberately tested `print` as an identifier because we hadn’t
+added keywords yet. That expectation now changes. Keep the purpose of
+`identifiers_can_end_the_source` by replacing its `print` input with `printer`:
+
+```diff title="rlox/crates/syntax/src/lib.rs · identifiers_can_end_the_source"
+     fn identifiers_can_end_the_source() {
+-        for source in ["_", "A9", "print"] {
++        for source in ["_", "A9", "printer"] {
+```
+
+Keep the expected `Identifier` kind and whole-source range in that test.
+We’ll give `print` its keyword expectation in the next test, so the language
+change is explicit rather than allowing either result.
+
+## Check exact keywords and longer names
+
+Append these tests **inside the existing `mod tests`, before its closing
+brace**. Keep its imports and other tests:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append inside mod tests"
+#[test]
+fn recognizes_reserved_words() {
+    for (source, kind) in [
+        ("and", SyntaxKind::And),
+        ("class", SyntaxKind::Class),
+        ("else", SyntaxKind::Else),
+        ("false", SyntaxKind::False),
+        ("for", SyntaxKind::For),
+        ("fun", SyntaxKind::Fun),
+        ("if", SyntaxKind::If),
+        ("nil", SyntaxKind::Nil),
+        ("or", SyntaxKind::Or),
+        ("print", SyntaxKind::Print),
+        ("return", SyntaxKind::Return),
+        ("super", SyntaxKind::Super),
+        ("this", SyntaxKind::This),
+        ("true", SyntaxKind::True),
+        ("var", SyntaxKind::Var),
+        ("while", SyntaxKind::While),
+    ] {
+        assert_eq!(
+            scan(source),
+            vec![Token {
+                kind,
+                range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+            }]
+        );
+    }
+}
+
+#[test]
+fn keywords_do_not_split_longer_identifiers() {
+    for source in [
+        "forest",
+        "printer",
+        "classify",
+        "true_value",
+        "_if",
+        "Print",
+    ] {
+        assert_eq!(
+            scan(source),
+            vec![Token {
+                kind: SyntaxKind::Identifier,
+                range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+            }]
+        );
+    }
+}
+```
+
+The first test checks each reserved spelling. The second checks the competing
+identifier matches, including different case and an underscore prefix. In
+each case, the expected single token must cover the whole word.
+
+## Retrieve the text through the range
+
+Add this test **inside the same module** for the opening example:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append inside mod tests"
+#[test]
+fn token_spelling_comes_from_the_source() {
+    let source = "print printer";
+    let tokens = scan(source);
+
+    assert_eq!(
+        tokens,
+        vec![
+            Token {
+                kind: SyntaxKind::Print,
+                range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Whitespace,
+                range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Identifier,
+                range: TextRange::new(TextSize(6), TextSize(13)).unwrap(),
+            },
+        ]
+    );
+    assert_eq!(tokens[0].range.slice(source), Some("print"));
+    assert_eq!(tokens[1].range.slice(source), Some(" "));
+    assert_eq!(tokens[2].range.slice(source), Some("printer"));
+}
+```
+
+The first assertion checks category and location. The remaining assertions
+borrow the exact source pieces through those locations. They demonstrate
+that recognizing a keyword doesn’t discard its spelling, and that an
+identifier’s variable text is available without a payload in `SyntaxKind`.
+The source is borrowed throughout; scanning and slicing leave it intact.
+
+## Keep reconstruction checks in place
+
+Extend the input array in `token_ranges_cover_the_original_source`, keeping
+its existing examples and assertions:
+
+```diff title="rlox/crates/syntax/src/lib.rs · coverage corpus"
+             "(a+b)*c;",
++            "print printer",
++            "for forest",
++            "class classify",
++            "if(if_1)",
++            "return // print\nprinter",
+         ] {
+```
+
+These cases mix keywords with longer names, punctuation, whitespace, and
+comment text. The comment body still belongs to `LineComment`; words inside
+it aren’t classified separately. The exact-kind tests establish the new
+classification, while the coverage check continues to require every source
+byte in order.
+
+Run the syntax tests, then check the workspace:
+
+```sh
+cargo test -p rlox-syntax
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+The named tests should report `ok`, and formatting and Clippy should finish
+successfully. There are no dependency, manifest, adapter, or CLI changes, so
+`Cargo.lock` should remain unchanged. Numbers and strings still await their
+lexical rules.
+
+<details>
+<summary>Complete resulting syntax library</summary>
+
+```rust title="rlox/crates/syntax/src/lib.rs · complete resulting file"
+use logos::Logos;
+
+use rlox_text::{TextRange, TextSize};
+
+#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxKind {
+    #[token("(")]
+    LeftParen,
+    #[token(")")]
+    RightParen,
+    #[token("{")]
+    LeftBrace,
+    #[token("}")]
+    RightBrace,
+    #[token(",")]
+    Comma,
+    #[token(".")]
+    Dot,
+    #[token("-")]
+    Minus,
+    #[token("+")]
+    Plus,
+    #[token(";")]
+    Semicolon,
+    #[token("/")]
+    Slash,
+    #[token("*")]
+    Star,
+    #[token("!")]
+    Bang,
+    #[token("!=")]
+    BangEqual,
+    #[token("=")]
+    Equal,
+    #[token("==")]
+    EqualEqual,
+    #[token(">")]
+    Greater,
+    #[token(">=")]
+    GreaterEqual,
+    #[token("<")]
+    Less,
+    #[token("<=")]
+    LessEqual,
+    #[token("and")]
+    And,
+    #[token("class")]
+    Class,
+    #[token("else")]
+    Else,
+    #[token("false")]
+    False,
+    #[token("for")]
+    For,
+    #[token("fun")]
+    Fun,
+    #[token("if")]
+    If,
+    #[token("nil")]
+    Nil,
+    #[token("or")]
+    Or,
+    #[token("print")]
+    Print,
+    #[token("return")]
+    Return,
+    #[token("super")]
+    Super,
+    #[token("this")]
+    This,
+    #[token("true")]
+    True,
+    #[token("var")]
+    Var,
+    #[token("while")]
+    While,
+    #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
+    Identifier,
+    #[regex(r"[ \t\r\n]+")]
+    Whitespace,
+    #[regex(r"//[^\n]*", allow_greedy = true)]
+    LineComment,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+
+pub fn scan(source: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+
+    for (result, span) in SyntaxKind::lexer(source).spanned() {
+        let kind = match result {
+            Ok(kind) => kind,
+            Err(()) => SyntaxKind::Error,
+        };
+        let range = TextRange::new(TextSize(span.start), TextSize(span.end))
+            .expect("Logos spans are ordered");
+
+        tokens.push(Token { kind, range });
+    }
+
+    tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextRange, TextSize};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()=!");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source);
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(tokens[0].range.slice(source), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(tokens[1].range.slice(source), Some("!"));
+    }
+
+    #[test]
+    fn scans_adjacent_paired_operators() {
+        assert_eq!(
+            scan("!==="),
+            vec![
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::EqualEqual,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_lookahead_preserves_the_next_character() {
+        assert_eq!(
+            scan("!é("),
+            vec![
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn single_operator_can_end_the_source() {
+        for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifiers_stop_before_operators() {
+        assert_eq!(
+            scan("a_2!=other"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(5), TextSize(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn identifiers_can_end_the_source() {
+        for source in ["_", "A9", "printer"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifier_rules_preserve_unsupported_characters() {
+        assert_eq!(
+            scan("2aé_b"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(4), TextSize(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_whitespace_between_tokens() {
+        assert_eq!(
+            scan("a \t\r\n!= b"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(5), TextSize(7)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(7), TextSize(8)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(8), TextSize(9)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn whitespace_uses_the_lox_character_set() {
+        for source in ["\u{000b}", "\u{000c}", "\u{00a0}"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_ranges_cover_the_original_source() {
+        for source in [
+            "",
+            " \t\r\n",
+            "a \t\r\n!= b",
+            "a_2!=other",
+            "2aé_b",
+            "a\u{00a0}b",
+            "/",
+            "/name",
+            "//",
+            "//\n",
+            "//é\r\nname",
+            "///",
+            "a//x\nb",
+            "{},.-+;*",
+            "<=>=<>",
+            "<==>==",
+            "a<=b!=c>=d",
+            "(a+b)*c;",
+            "print printer",
+            "for forest",
+            "class classify",
+            "if(if_1)",
+            "return // print\nprinter",
+        ] {
+            let mut offset = 0;
+            let mut reconstructed = String::new();
+
+            for token in scan(source) {
+                let text = token.range.slice(source).expect("valid UTF-8 source slice");
+                assert!(!text.is_empty());
+                let end = offset + text.len();
+                let expected = TextRange::new(TextSize(offset), TextSize(end)).unwrap();
+                assert_eq!(token.range, expected);
+
+                reconstructed.push_str(text);
+                offset = end;
+            }
+
+            assert_eq!(offset, source.len());
+            assert_eq!(reconstructed, source);
+        }
+    }
+
+    #[test]
+    fn recognizes_single_slashes() {
+        assert_eq!(
+            scan("/"),
+            vec![Token {
+                kind: SyntaxKind::Slash,
+                range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+            }]
+        );
+        assert_eq!(
+            scan("/name"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Slash,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_leave_the_line_feed_unread() {
+        assert_eq!(
+            scan("//é\r\nname"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LineComment,
+                    range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(6), TextSize(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_can_end_at_eof() {
+        for source in ["//", "//é", "///"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::LineComment,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_characters_remain_separate_tokens() {
+        assert_eq!(
+            scan("@é💥"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_remaining_single_character_punctuation() {
+        for (source, kind) in [
+            ("{", SyntaxKind::LeftBrace),
+            ("}", SyntaxKind::RightBrace),
+            (",", SyntaxKind::Comma),
+            (".", SyntaxKind::Dot),
+            ("-", SyntaxKind::Minus),
+            ("+", SyntaxKind::Plus),
+            (";", SyntaxKind::Semicolon),
+            ("*", SyntaxKind::Star),
+            ("<", SyntaxKind::Less),
+            (">", SyntaxKind::Greater),
+        ] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn recognizes_adjacent_comparison_operators() {
+        assert_eq!(
+            scan("<=>=<>"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Less,
+                    range: TextRange::new(TextSize(4), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Greater,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn comparison_pairs_leave_extra_equals_tokens() {
+        assert_eq!(
+            scan("<==>=="),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_reserved_words() {
+        for (source, kind) in [
+            ("and", SyntaxKind::And),
+            ("class", SyntaxKind::Class),
+            ("else", SyntaxKind::Else),
+            ("false", SyntaxKind::False),
+            ("for", SyntaxKind::For),
+            ("fun", SyntaxKind::Fun),
+            ("if", SyntaxKind::If),
+            ("nil", SyntaxKind::Nil),
+            ("or", SyntaxKind::Or),
+            ("print", SyntaxKind::Print),
+            ("return", SyntaxKind::Return),
+            ("super", SyntaxKind::Super),
+            ("this", SyntaxKind::This),
+            ("true", SyntaxKind::True),
+            ("var", SyntaxKind::Var),
+            ("while", SyntaxKind::While),
+        ] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn keywords_do_not_split_longer_identifiers() {
+        for source in [
+            "forest",
+            "printer",
+            "classify",
+            "true_value",
+            "_if",
+            "Print",
+        ] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_spelling_comes_from_the_source() {
+        let source = "print printer";
+        let tokens = scan(source);
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::Print,
+                    range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(6), TextSize(13)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(tokens[0].range.slice(source), Some("print"));
+        assert_eq!(tokens[1].range.slice(source), Some(" "));
+        assert_eq!(tokens[2].range.slice(source), Some("printer"));
+    }
+}
+```
+
+</details>
+
+The scanner now distinguishes reserved words from ordinary names while
+keeping their source text available through the same ranges. Next we’ll
+recognize number spellings, which need a different continuation rule.
+
+[Crafting Interpreters, “Reserved Words and Identifiers”](https://craftinginterpreters.com/scanning.html#reserved-words-and-identifiers)
+introduces the same vocabulary. Our Logos rules make the fixed spellings
+part of the kind definition, and our ranges retain the original text.

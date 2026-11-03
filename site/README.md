@@ -120,3 +120,8 @@ Section 7.2 is drafted at `src/content/docs/chapter-7/7.2-punctuation.mdx`,
 served at `/chapter-7/7.2-punctuation/`. It completes fixed punctuation and
 comparison rules with boundary/reconstruction checks. The section and
 matching Rust are accepted; local checks pass.
+
+Section 7.3 is drafted at `src/content/docs/chapter-7/7.3-keywords.mdx`,
+served at `/chapter-7/7.3-keywords/`. It distinguishes keywords from names and
+explains borrowed spelling through source ranges. Text is approved; matching
+Rust and local checks are verified and accepted.
