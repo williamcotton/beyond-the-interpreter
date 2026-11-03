@@ -1,6 +1,6 @@
 # Destination architecture
 
-This document preserves the architecture agreed in broad terms on 2026-11-02. It specifies responsibilities and constraints, not an initial scaffold or permission to implement future systems. Exact APIs, versions, and lesson-sized introductions require their own justified proposals.
+This document owns the destination architecture agreed in broad terms on 2026-11-02. The [roadmap](PROJECT_OUTLINE.md) owns chapter coverage and [status](AUTHORING_STATUS.md) records what exists. These responsibilities are constraints, not permission to scaffold future systems. Exact APIs, versions, and section-sized introductions require a current need and the text-first review process in [REVIEW_GUIDE.md](REVIEW_GUIDE.md).
 
 ## Product contract
 
@@ -12,7 +12,7 @@ The thin VS Code extension registers Lox, supplies basic lexical highlighting, a
 
 ## Repository and crate destination
 
-Use `site/` for the publication, `rlox/` for reader code, and `authoring/` for author-only support. The eventual Cargo workspace lives under `rlox/`; crates live under `rlox/crates/`, with the editor extension under `rlox/editors/vscode/`. Internal package names use `rlox-*`; the app exposes the `rlox` executable.
+Use `site/` for the publication, `rlox/` for reader code, and `authoring/` for author-only support. The eventual Cargo workspace lives under `rlox/`; crates live under `rlox/crates/`, with the editor extension under `rlox/editors/vscode/`. The accepted starting package is named `rlox` and lives directly under `rlox/`. At the justified workspace extraction, internal packages use `rlox-*` and the app continues to expose the `rlox` executable. Explain and show that migration rather than rewriting the accepted starting point.
 
 Create each crate only when its responsibility becomes useful and explain the extraction. Clear modules may precede a crate. This is the intended destination map; changes require an explicit rationale rather than silently discarding the plan.
 
@@ -54,7 +54,7 @@ These library intentions come from the earlier outline. Verify current official 
 - **Insta**: reviewed syntax/diagnostic snapshots alongside semantic assertions. Snapshot approval is deliberate; CI and reader verification must not silently bless changed output.
 - **Tower-based LSP infrastructure**: protocol scaffolding after explaining a small JSON-RPC exchange. Select the actual maintained package and supporting runtime/serialization dependencies at that stage; no exact LSP or DAP library is committed yet.
 - **Criterion**: reproducible benchmarks after explaining the limitations of simple timing.
-- **Astro, Starlight, MDX, React, TypeScript**: preferred publication stack, subject to compatibility checks. Start with the smallest reviewable lesson page.
+- **Astro, Starlight, MDX, React, TypeScript**: the existing publication stack; exact installed versions live in `../site/package.json` and its lockfile. Starlight currently provides code listings and focused diffs. Add custom viewers or interaction primitives only when the current lesson requires capabilities those features do not supply.
 
 Conditional choices include Proptest, Salsa, Ropey, arena/slot-map libraries, additional protocol libraries, and release automation such as dist. Introduce only for a demonstrated requirement. The old testing chapter prescribed Proptest while its scope section called it optional; this consolidation treats generated-property tooling as conditional and preserves the requirement for meaningful invariant testing.
 
@@ -82,6 +82,8 @@ Temporary implementations must have a stated learning purpose, a bounded lifetim
 ## Teaching displays and reproducible source
 
 Keep the representation used to reconstruct exact source changes separate from the presentation used to teach them. Full-file replacement data may support reconstruction, but must not force a whole-file removed/added display. A teaching diff should distinguish genuinely changed lines from unchanged context; complete before/after files remain available separately. Verify the displayed edit as well as the resulting source.
+
+Text-first authoring does not make provisional examples verified. After text review, follow the actual displayed route to establish the implementation and its evidence.
 
 This is a presentation contract, not a request to build a custom diff framework. Use the smallest publishing mechanism that satisfies it. Reuse a historical fixture only after checking its behavior and code against the current lesson state; a final-chapter trace may depend on grammar not yet taught.
 

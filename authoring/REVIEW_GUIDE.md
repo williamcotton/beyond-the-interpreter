@@ -1,6 +1,6 @@
 # Proposal, review, and acceptance
 
-This document replaces the repetitive project checklist. It is a review cycle, not authorization to execute future work. Apply the relevant checks to planning and author infrastructure as well as lessons.
+This document owns chapter planning, the section authoring loop, and review criteria. The [roadmap](PROJECT_OUTLINE.md) owns chapter coverage; the [architecture](ARCHITECTURE.md) owns technical responsibilities; the [brief](LESSON_BRIEF.md) owns current authorization. Apply relevant criteria to author infrastructure and documentation tasks as well as lessons.
 
 ## Before work
 
@@ -9,6 +9,22 @@ This document replaces the repetitive project checklist. It is a review cycle, n
 - Explain new Rust concepts, crate/dependency/API changes, and any architecture transition. A roadmap entry alone is insufficient justification for adding code now.
 - Pair each consequential edit with its teaching explanation. Identify useful references and the purpose/placement of any visual.
 - Define the reader observation, meaningful checks, deliverables, and stopping point. Obtain approval only where it is not already present.
+
+## Plan chapters, discover sections
+
+Use the roadmap’s chapter titles and sequence as the working plan. At chapter level, establish the reader’s central question, starting capability, desired outcome, prerequisites, important transitions, examples/visual questions, and boundaries. Do not write a fixed section schedule. Scope the current section around an understandable mechanism or observation and let human review decide whether to split, expand, or consolidate it.
+
+A feature label or file count does not establish reasonable learning load. Recovery, representation changes, typed views, and diagnostics can hide several new reasoning problems even when the grammar is unchanged. Conversely, routine setup does not need a separate page for every action. Keep a visible path to useful behavior. Explain a real sequencing problem before proposing a roadmap change.
+
+## Two review points in one authoring loop
+
+**Text phase.** Draft the current section with precise instructions and expected observations, without creating/updating Rust files or compiling a temporary version ahead of review. Check current official references and the existing accepted source; build and inspect the page. Present the actual rendered text for review of writing and scope. Expected output is provisional until followed in the implementation phase; keep that verification state in author records rather than padding the manuscript with caveats.
+
+**Implementation phase.** After the user is happy with the text and authorizes following it, execute the displayed route in order from the accepted starting point. Inspect generated content before edits, apply the teaching changes, run commands, and observe output, expected failures, and recovery. Correct errors and omissions in the text as they appear. Do not silently make extra source edits that the reader was never told to make. Recheck the affected sequence; return material scope changes to text review.
+
+**Combined delivery.** Verify the endpoint’s behavior and presentation, then deliver the actual section and code for final acceptance. Text approval and a passing endpoint are different pieces of evidence. Do not move on while either text or implementation corrections remain unresolved. A documentation-only task ends with its documents and consistency checks, without inventing a Rust implementation pass.
+
+The introduction and Section 1.1 are accepted examples; their paths and evidence are in [status](AUTHORING_STATUS.md). Section 1.1 establishes a first code introduction, a focused modification, complete file views, and ordered command/output presentation. An algorithm lesson with an explanatory visual has not yet been authored or accepted.
 
 ## Four human review questions
 
@@ -77,8 +93,8 @@ For documentation-only planning tasks, check source coverage, internal consisten
 
 ## Delivery and acceptance
 
-Submit the actual page/code or planning documents, a short account of behavior/changes, checks actually performed, unresolved issues, and a focused review request. Update status and the brief to **Ready for review**. User acceptance is a separate event.
+At text handoff, submit the rendered manuscript and identify implementation/route checks still pending. At combined handoff, submit the page and matching code, observed behavior, actual checks, unresolved issues, and a focused review request. Update status and the brief to **Ready for review**, stating which phase is ready. Record user acceptance separately with the relevant conversation evidence.
 
 If revisions are requested, keep the same assignment active and rerun only affected checks plus any necessary regression checks. Do not mark the work accepted or begin the next task to compensate for an unresolved review.
 
-At milestone/chapter boundaries, reread the sequence with the user. Check prerequisites, pacing, terminology, architectural growth, repetition, and promised visual coverage. Replay the cumulative reader route and preserve the accepted endpoint. Agree on checkpoint storage when the first endpoint needs it; Git history alone is insufficient, and an elaborate archive framework is not required up front.
+At milestone/chapter boundaries, reread the sequence with the user. Check prerequisites, pacing, terminology, architectural growth, repetition, and promised visual coverage. Replay the cumulative reader route and preserve the accepted endpoint. Keep accepted source and instructions reconstructible. The first endpoint has complete manifest/source/ignore listings, ordered Cargo commands, and a retained lockfile. Before changing it in a later section, agree on enough source/checkpoint preservation to reconstruct earlier accepted states; Git history alone is insufficient, and an elaborate archive framework is not required up front.

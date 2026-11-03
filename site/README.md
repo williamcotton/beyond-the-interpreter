@@ -1,6 +1,11 @@
 # Local book site
 
 The introduction is authored in `src/content/docs/index.mdx` and served at `/`.
+Chapter 1, Section 1 is in `src/content/docs/foundations/a-third-lox/first-program.mdx`
+and served at `/foundations/a-third-lox/first-program/`. The section and matching
+`rlox/` greeting program are accepted. Its instructions were followed successfully
+on the local machine; see
+[authoring status](../authoring/AUTHORING_STATUS.md) for checks and limits.
 Astro and Starlight provide the publication; Starlight includes MDX support.
 The React integration and strict TypeScript configuration support future
 explanations embedded in MDX. This introduction needs no client-side React.
@@ -17,7 +22,7 @@ npm run dev
 
 Open the Local URL printed by Astro, normally <http://localhost:4321/>.
 If that port is occupied, Astro prints the alternative port it selected.
-Edits to the introduction refresh the page automatically. Stop the server
+Edits to the manuscript refresh the page automatically. Stop the server
 with Ctrl+C.
 
 ## Check and build
