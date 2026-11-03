@@ -4,12 +4,14 @@ use rlox_text::{TextRange, TextSize};
 pub enum SyntaxKind {
     LeftParen,
     RightParen,
+    Slash,
     Bang,
     BangEqual,
     Equal,
     EqualEqual,
     Identifier,
     Whitespace,
+    LineComment,
     Error,
 }
 
@@ -42,6 +44,17 @@ pub fn scan(source: &str) -> Vec<Token> {
                     SyntaxKind::EqualEqual
                 } else {
                     SyntaxKind::Equal
+                }
+            }
+            '/' => {
+                if chars.next_if(|&(_, next)| next == '/').is_some() {
+                    end += 1;
+                    while let Some((offset, next)) = chars.next_if(|&(_, next)| next != '\n') {
+                        end = offset + next.len_utf8();
+                    }
+                    SyntaxKind::LineComment
+                } else {
+                    SyntaxKind::Slash
                 }
             }
             ' ' | '\t' | '\r' | '\n' => {
@@ -281,6 +294,13 @@ mod tests {
             "a_2!=other",
             "2aé_b",
             "a\u{00a0}b",
+            "/",
+            "/name",
+            "//",
+            "//\n",
+            "//é\r\nname",
+            "///",
+            "a//x\nb",
         ] {
             let mut offset = 0;
             let mut reconstructed = String::new();
@@ -298,6 +318,64 @@ mod tests {
 
             assert_eq!(offset, source.len());
             assert_eq!(reconstructed, source);
+        }
+    }
+
+    #[test]
+    fn recognizes_single_slashes() {
+        assert_eq!(
+            scan("/"),
+            vec![Token {
+                kind: SyntaxKind::Slash,
+                range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+            }]
+        );
+        assert_eq!(
+            scan("/name"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Slash,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_leave_the_line_feed_unread() {
+        assert_eq!(
+            scan("//é\r\nname"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LineComment,
+                    range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(6), TextSize(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_can_end_at_eof() {
+        for source in ["//", "//é", "///"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::LineComment,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
         }
     }
 }

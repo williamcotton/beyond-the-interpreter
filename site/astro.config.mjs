@@ -52,6 +52,7 @@ export default defineConfig({
           items: [
             { label: '6.1 · Let a name grow', link: '/chapter-6/6.1-identifiers/' },
             { label: '6.2 · Keep the spaces', link: '/chapter-6/6.2-whitespace/' },
+            { label: '6.3 · Read a line comment', link: '/chapter-6/6.3-line-comments/' },
           ],
         },
       ],

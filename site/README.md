@@ -103,3 +103,8 @@ served at `/chapter-6/6.2-whitespace/`. A static annotated token listing
 explains retained whitespace; the text adds classification and source-coverage
 checks. The section and matching Rust are accepted; local workspace checks
 and native example consistency are verified.
+
+Section 6.3 is drafted at `src/content/docs/chapter-6/6.3-line-comments.mdx`,
+served at `/chapter-6/6.3-line-comments/`. Static byte steps explain retained
+comments and unread terminating LF. The section and matching Rust are accepted,
+completing Chapter 6; local workspace checks and native example consistency pass.
