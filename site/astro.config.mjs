@@ -31,6 +31,12 @@ export default defineConfig({
             { label: '3.2 · Describe the command with Clap', link: '/chapter-3/3.2-clap/' },
           ],
         },
+        {
+          label: '4 · Source Locations, Workspaces, and CI',
+          items: [
+            { label: '4.1 · Locate text with byte ranges', link: '/chapter-4/4.1-byte-ranges/' },
+          ],
+        },
       ],
       customCss: ['./src/styles/book.css'],
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },

@@ -1,0 +1,337 @@
+---
+title: 4.1 — Locate text with byte ranges
+slug: chapter-4/4.1-byte-ranges
+description: Represent half-open source ranges and safely select text at UTF-8 byte boundaries.
+prev:
+  link: /chapter-3/3.2-clap/
+  label: 3.2 · Describe the command with Clap
+next: false
+---
+
+<p className="book-subtitle">Chapter 4 · Source Locations, Workspaces, and CI</p>
+
+We can read an entire source file. A language tool also needs to point to
+specific pieces of it: a word, an operator, or the place where something is
+missing. Consider this source:
+
+```text title="A source fragment"
+print 42;
+```
+
+How would we record the location of `print`? Its first byte is at offset `0`,
+and the space after it is at offset `5`. We’ll describe the word with the
+**half-open range** `[0, 5)`: include the start, stop before the end. Its length
+is `5 - 0`, and the following text can begin at exactly `5` without overlap.
+An empty range, such as `[5, 5)`, describes a position between bytes.
+
+Start from [Section 3.2](/chapter-3/3.2-clap/). We’ll build and test a small
+source-coordinate API alongside the CLI. Keep the terminal in **`rlox/`**;
+from the repository root, enter `cd rlox` first.
+
+## Give coordinates their own types
+
+We’ll use `TextSize` for a byte offset or byte count. It wraps Rust’s `usize`,
+the integer type used for string lengths and indexing. The wrapper makes the
+unit visible in our signatures: these numbers describe bytes of source text.
+
+A `TextRange` contains two such offsets. Its constructor will reject a start
+that follows the end. The endpoints remain private so users of the library
+construct ranges through that check.
+
+Create **`rlox/src/lib.rs`** with this complete initial content:
+
+```rust title="rlox/src/lib.rs · initial file"
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextSize(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextRange {
+    start: TextSize,
+    end: TextSize,
+}
+
+impl TextRange {
+    pub fn new(start: TextSize, end: TextSize) -> Option<Self> {
+        if start.0 > end.0 {
+            return None;
+        }
+
+        Some(Self { start, end })
+    }
+}
+```
+
+`TextSize` is a **tuple struct**: its field has a position instead of a name.
+`TextSize(5)` wraps an integer, and `.0` accesses the wrapped value. The `pub`
+keywords make the type and its field available outside this library. In
+`TextRange`, the type is public but the named fields aren’t, so other crates
+can’t bypass the constructor with a struct literal. The Rust Book’s
+[tuple-struct discussion](https://doc.rust-lang.org/book/ch05-01-defining-structs.html#using-tuple-structs-without-named-fields-to-create-different-types)
+explains this way to give wrapped values a distinct type.
+
+The standard derives supply useful behavior for these small values:
+`Debug` lets test failures display them, `PartialEq` and `Eq` support equality,
+and `Copy` lets Rust copy a coordinate instead of moving it. `Copy` requires
+`Clone`, so we derive both. Our types contain only integers and other copied
+coordinates.
+
+`impl TextRange` groups operations associated with that type. Inside it,
+`Self` means `TextRange`. The public `new` function returns `None` for a
+reversed range and `Some(Self { start, end })` otherwise. We allow equal
+endpoints because an empty range is useful too. This function has no `self`
+parameter: call it through the type, as `TextRange::new(...)`.
+
+Cargo recognizes `src/lib.rs` as a
+[library target](https://doc.rust-lang.org/cargo/reference/cargo-targets.html#library)
+within our existing package. `src/main.rs` remains the executable target.
+No manifest edit or `mod` declaration in `main.rs` is needed. The library
+gives source-coordinate code a public, testable boundary without depending
+on the command-line types. We’ll extract it into its own package later in
+this chapter.
+
+## Ask whether a range selects valid text
+
+An ordered pair of offsets is not yet a valid slice of a particular string.
+Its end might be beyond that string, or an endpoint might cut through a
+multibyte character. The constructor knows only the numbers; the string is
+needed to answer those questions.
+
+We’ll add a method that receives the source and asks Rust to check the slice.
+The standard string method
+[`get`](https://doc.rust-lang.org/std/primitive.str.html#method.get)
+returns `Some(&str)` when the indices are in bounds and on UTF-8 boundaries,
+and `None` when they aren’t. It gives us a borrowed view without copying the
+source or panicking on invalid indices.
+
+In **`rlox/src/lib.rs`**, add `slice` **inside `impl TextRange`, after `new`
+and before the `impl` block’s closing brace**:
+
+```rust title="rlox/src/lib.rs · add inside impl TextRange"
+pub fn slice(self, source: &str) -> Option<&str> {
+    source.get(self.start.0..self.end.0)
+}
+```
+
+This is a **method**: `self` is the range we call it on, as in
+`range.slice(source)`. The range is a small `Copy` value, so passing it this
+way leaves the caller’s range available. The returned `&str` borrows from
+`source`; it doesn’t borrow from or live inside the range.
+
+The expression `start..end` builds Rust’s half-open index range. We unwrap
+the two `TextSize` values to supply the byte indices expected by `get`. The
+constructor’s ordering rule and the string’s boundary checks work together;
+a range can be well ordered while selecting no valid text from this source.
+The Rust Book’s
+[method discussion](https://doc.rust-lang.org/book/ch05-03-method-syntax.html)
+explains the difference between associated functions such as `new` and
+methods with a `self` parameter.
+
+## Check a word and a reversed range
+
+Append this test module **after the closing brace of `impl TextRange`**:
+
+```rust title="rlox/src/lib.rs · append test module"
+#[cfg(test)]
+mod tests {
+    use super::{TextRange, TextSize};
+
+    #[test]
+    fn selects_ascii_fragment() {
+        let word = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+
+        assert_eq!(word.slice("print 42;"), Some("print"));
+    }
+
+    #[test]
+    fn rejects_reversed_range() {
+        assert_eq!(TextRange::new(TextSize(5), TextSize(0)), None);
+    }
+}
+```
+
+The first test records the location from our opening example and checks the
+selected text. The second checks the constructor without involving a string.
+The `expect` message in the first test says what we have established: the
+range is ordered. Whether it selects the intended text is a separate
+assertion.
+
+Run the library tests:
+
+```sh
+cargo test --lib
+```
+
+The named tests should report `ok`. `--lib` selects the library target; it
+doesn’t run the CLI’s existing tests in `main.rs`.
+
+## A character can occupy more than one byte
+
+ASCII makes byte positions look like character positions. UTF-8 makes the
+unit difference visible. Consider the text `aé!`:
+
+```text title="UTF-8 bytes and character boundaries for aé!"
+offset    0    1    2    3    4
+character | a  |   é     | !  |
+UTF-8     | 61 | C3 | A9 | 21 |
+```
+
+The byte values are shown in hexadecimal. `a` occupies byte `0`; `é` occupies
+bytes `1` and `2`; `!` occupies byte `3`. The string’s byte length is `4`.
+The range `[1, 3)` selects the complete `é`. Offset `2` is inside its UTF-8
+encoding, so `[1, 2)` cannot produce a valid Rust string slice.
+
+Add this test **inside `mod tests`, after the existing tests**:
+
+```rust title="rlox/src/lib.rs · UTF-8 test"
+#[test]
+fn respects_utf8_boundaries() {
+    let source = "aé!";
+    let accent = TextRange::new(TextSize(1), TextSize(3)).expect("ordered range");
+    let split = TextRange::new(TextSize(1), TextSize(2)).expect("ordered range");
+
+    assert_eq!(accent.slice(source), Some("é"));
+    assert_eq!(split.slice(source), None);
+}
+```
+
+Both constructors succeed: neither pair is reversed. Only the first range
+selects text from this string. The second assertion expects rejection by
+`slice`; this is a successful test of an invalid input, not an intentional
+test failure.
+
+Run again:
+
+```sh
+cargo test --lib
+```
+
+The tests should pass. Our coordinate unit remains a byte; we haven’t added
+character-index or display-column conversions.
+
+## Check empty ranges and the end of the source
+
+A valid range can stop exactly at the source’s byte length. An empty range
+there selects an empty string. Going beyond that length is invalid, and even
+an empty range must lie on a UTF-8 boundary.
+
+Add one more test **inside `mod tests`**:
+
+```rust title="rlox/src/lib.rs · bounds and empty-range test"
+#[test]
+fn checks_bounds_and_empty_ranges() {
+    let source = "aé!";
+    let end = TextSize(source.len());
+    let eof = TextRange::new(end, end).expect("ordered range");
+    let beyond = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+    let interior = TextRange::new(TextSize(2), TextSize(2)).expect("ordered range");
+
+    assert_eq!(eof.slice(source), Some(""));
+    assert_eq!(beyond.slice(source), None);
+    assert_eq!(interior.slice(source), None);
+}
+```
+
+`source.len()` supplies the byte length. We use the same `end` value twice;
+the `Copy` implementation makes that natural for a coordinate. The empty
+range at offset `4` succeeds, while the one at offset `2` is rejected because
+it lies inside `é`.
+
+Run:
+
+```sh
+cargo test --lib
+```
+
+All library tests should report `ok`. Then check both targets together:
+
+```sh
+cargo test
+```
+
+This should run the source-coordinate tests in the library and the existing
+CLI tests in the binary successfully. The two targets test different
+responsibilities within one package.
+
+<details>
+<summary>Complete rlox/src/lib.rs</summary>
+
+```rust title="rlox/src/lib.rs · complete file"
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextSize(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextRange {
+    start: TextSize,
+    end: TextSize,
+}
+
+impl TextRange {
+    pub fn new(start: TextSize, end: TextSize) -> Option<Self> {
+        if start.0 > end.0 {
+            return None;
+        }
+
+        Some(Self { start, end })
+    }
+
+    pub fn slice(self, source: &str) -> Option<&str> {
+        source.get(self.start.0..self.end.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TextRange, TextSize};
+
+    #[test]
+    fn selects_ascii_fragment() {
+        let word = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+
+        assert_eq!(word.slice("print 42;"), Some("print"));
+    }
+
+    #[test]
+    fn rejects_reversed_range() {
+        assert_eq!(TextRange::new(TextSize(5), TextSize(0)), None);
+    }
+
+    #[test]
+    fn respects_utf8_boundaries() {
+        let source = "aé!";
+        let accent = TextRange::new(TextSize(1), TextSize(3)).expect("ordered range");
+        let split = TextRange::new(TextSize(1), TextSize(2)).expect("ordered range");
+
+        assert_eq!(accent.slice(source), Some("é"));
+        assert_eq!(split.slice(source), None);
+    }
+
+    #[test]
+    fn checks_bounds_and_empty_ranges() {
+        let source = "aé!";
+        let end = TextSize(source.len());
+        let eof = TextRange::new(end, end).expect("ordered range");
+        let beyond = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+        let interior = TextRange::new(TextSize(2), TextSize(2)).expect("ordered range");
+
+        assert_eq!(eof.slice(source), Some(""));
+        assert_eq!(beyond.slice(source), None);
+        assert_eq!(interior.slice(source), None);
+    }
+}
+```
+
+</details>
+
+Finally, run the existing operation:
+
+```sh
+cargo run --quiet -- source hello.lox
+```
+
+It should still print `print "Hello, Lox!";` followed by the file’s newline.
+The CLI continues to display the whole file; our new library tests exercise
+selection of fragments directly.
+
+We can now store an ordered span and ask whether it selects valid UTF-8 text.
+A range still needs a source to give it meaning. Next, we’ll distinguish the
+same numeric range in different files.

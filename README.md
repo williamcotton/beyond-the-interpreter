@@ -4,7 +4,7 @@
 
 An interactive Rust companion to Robert Nystrom’s *Crafting Interpreters*. Readers build `rlox`: two Lox execution engines and the tools to inspect, edit, debug, test, and distribute a language.
 
-The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; tests will enter in Chapter 2 alongside reading source. Section 2.1 and its matching Rust endpoint are accepted. Section 2.2 and its matching Rust/sample are accepted. Section 2.3 and its matching Rust are accepted. Section 2.4 and its matching unit tests are accepted. Section 3.1 and its matching Rust are accepted. Section 3.2 and its matching Clap implementation are accepted. The current `source FILE` command reads exactly one supplied file, prints its source text, and reports input errors on stderr with a failure status. Later chapters describe planned work, not implemented capabilities.
+The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; tests will enter in Chapter 2 alongside reading source. Section 2.1 and its matching Rust endpoint are accepted. Section 2.2 and its matching Rust/sample are accepted. Section 2.3 and its matching Rust are accepted. Section 2.4 and its matching unit tests are accepted. Section 3.1 and its matching Rust are accepted. Section 3.2 and its matching Clap implementation are accepted. Section 4.1 and its source-coordinate library are accepted. The current `source FILE` command reads exactly one supplied file, prints its source text, and reports input errors on stderr with a failure status. Later chapters describe planned work, not implemented capabilities.
 
 ## Read the book locally
 
@@ -33,7 +33,7 @@ Expected program output:
 print "Hello, Lox!";
 ```
 
-The local endpoint was verified using rustc and Cargo 1.95.0 on macOS. Formatting, Clippy, and Cargo test passed; five unit tests check the declared command interface and help status. The Section 2.3 route established usage/read diagnostics and recovery; Section 2.4 verified the test additions, a deliberate regression, restoration, and unchanged CLI behavior. Section 3.2 verified dependency resolution, generated help, usage status 2, file-read failure status 1, source output, and migrated tests; see authoring status for details. Fresh installation and other platforms have not been tested.
+The local endpoint was verified using rustc and Cargo 1.95.0 on macOS. Formatting, Clippy, and Cargo test passed; four library tests check ranges/UTF-8 slicing, and five binary tests check the declared command interface and help status. The Section 2.3 route established usage/read diagnostics and recovery; Section 2.4 verified the test additions, a deliberate regression, restoration, and unchanged CLI behavior. Section 3.2 verified dependency resolution, generated help, usage status 2, file-read failure status 1, source output, and migrated tests; see authoring status for details. Fresh installation and other platforms have not been tested.
 
 ## How we work
 
@@ -54,7 +54,7 @@ Read these and inspect the actual files before substantive work. The roadmap is 
 ## Repository
 
 - `site/` — MDX manuscript and the Astro/Starlight publication, with React available for explanations that need interaction.
-- `rlox/` — the Rust program readers build, currently one binary package using Clap for its command interface.
+- `rlox/` — the Rust program readers build, currently one package with a source-coordinate library and a CLI using Clap.
 - `authoring/` — the author-facing guidance and records. Add fixtures or validation tools here only when a lesson needs them.
 
 Readers build Rust; the publishing stack is author infrastructure. Git is an ordinary development tool, not the book’s instructional history. Accepted endpoints must remain reconstructible from the book and appropriate reference files.

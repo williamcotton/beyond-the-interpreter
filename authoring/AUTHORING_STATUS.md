@@ -13,8 +13,8 @@ Section 1.1 demonstrates a code introduction, a meaningful one-line edit, comple
 
 ## Actual repository and capabilities
 
-- `site/`: Astro/Starlight publication with MDX, React integration, and strict TypeScript. The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; the proposed Section 1.2 was removed after scope review. Section 2.1 and its matching Rust endpoint are accepted; Section 2.2 and its matching Rust/sample are accepted; Section 2.3 and its matching Rust are accepted. Section 2.4 and its matching Rust/tests are accepted. The Chapter 3 section frame is accepted; Section 3.1 and matching Rust are accepted; Section 3.2 and its matching Clap implementation/tests are accepted. Navigation includes only authored pages. Starlight supplies listings and a focused diff; no custom diff viewer or trace framework exists.
-- `rlox/`: one binary package named `rlox`, Rust edition 2024, with Clap 4.6.7 and its derive feature. Cargo.lock records the resolved dependencies. Its `source FILE` command reads exactly one filename as UTF-8 and prints its contents without adding a newline. Clap generates help and validates commands/arguments; requested help succeeds on stdout, while usage errors fail with status 2 on stderr; failed reads print a contextual stderr diagnostic and fail. Successful reads return success. Files are Cargo.toml, Cargo.lock, src/main.rs, .gitignore, and hello.lox. It does not scan tokens or execute Lox. Five unit tests check the declared CLI, rejection cases, and help status; they do not cover file reads, stderr, or exit status.
+- `site/`: Astro/Starlight publication with MDX, React integration, and strict TypeScript. The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; the proposed Section 1.2 was removed after scope review. Section 2.1 and its matching Rust endpoint are accepted; Section 2.2 and its matching Rust/sample are accepted; Section 2.3 and its matching Rust are accepted. Section 2.4 and its matching Rust/tests are accepted. The Chapter 3 section frame is accepted; Section 3.1 and matching Rust are accepted; Section 3.2 and its matching Clap implementation/tests are accepted. Chapter 4’s working frame is accepted; 4.1 and its matching library are accepted. Navigation includes only authored pages. Starlight supplies listings and a focused diff; no custom diff viewer or trace framework exists.
+- `rlox/`: one package named `rlox`, with a CLI binary and source-coordinate library, Rust edition 2024, with Clap 4.6.7 and its derive feature. Cargo.lock records the resolved dependencies. Its `source FILE` command reads exactly one filename as UTF-8 and prints its contents without adding a newline. Clap generates help and validates commands/arguments; requested help succeeds on stdout, while usage errors fail with status 2 on stderr; failed reads print a contextual stderr diagnostic and fail. Successful reads return success. Files are Cargo.toml, Cargo.lock, src/main.rs, src/lib.rs, .gitignore, and hello.lox. The library exposes ordered TextRange values and safe UTF-8 source slicing through handwritten TextSize/TextRange types. It does not scan tokens or execute Lox. Four library tests check ranges/slicing, and five binary tests check the declared CLI, rejection cases, and help status; they do not cover file reads, stderr, or exit status.
 - `authoring/`: current roadmap, architecture, review guidance, status, and brief. No fixtures/replay framework or future crate scaffold exists.
 - Hosted CI, deployment, release artifacts, distribution, and cross-platform coverage: not established.
 
@@ -196,8 +196,34 @@ The user rejected the proposed greeting-process-test section as offering too lit
 
 **Review focus:** matching section and typed CLI, generated help versus usage/read failures, and retirement of manual parsing/tests. No unfinished implementation work remains within 3.2; the combined endpoint is accepted.
 
+## CH04-PLAN — Frame Chapter 4 sections
+
+**Authorization and commit:** the user accepted 3.2 and requested a commit followed by Chapter 4 section planning. Committed the accepted endpoint and supporting records as `5ddd5a9` (`feat: pair section 3.2 with clap command parsing`). No push or publication.
+
+**Status:** Accepted when the user requested starting 4.1 after reviewing the section frame.
+
+**Proposal:** four adjustable boundaries: safe byte ranges in a small library target within the existing package; file identity and origins; extraction into app/text workspace packages; automated workspace checks. Detailed examples and exclusions are in the roadmap. This preserves chapter coverage without mixing new text algorithms into the filesystem/manifest move. No unused app dependency, new CLI operation, VFS, or future crate scaffolding.
+
+**Evidence and prerequisites:** actual CLI, manifest/lockfile, and tests inspected. At planning time git remote -v was empty; no tracked .github workflow existed. The user subsequently added origin, confirmed below. Current official str::get, Cargo workspace, and GitHub secure-use docs support the proposed direction; exact APIs/action pins remain for authoring. Hosted CI still needs an authorized push and an observed run; adding the remote alone does not supply hosted verification. All rlox files remain identical to the accepted commit. Document consistency and git diff whitespace checked; no new tests, runtime/site builds, browser/screenshots, source, or workflow changes.
+
+## CH04-01 — Locate text with byte ranges
+
+**Authorization:** the user requested starting 4.1, accepting the Chapter 4 frame, and reported adding a remote. Read-only Git inspection confirms origin at https://github.com/williamcotton/beyond-the-interpreter.git. No push or CI run performed or authorized.
+
+**Status:** Accepted when the user said “great, commit and move on to 4.2.” Matching library and ordered reader route are verified.
+
+**Scope:** new library target at rlox/src/lib.rs: TextSize, private-field TextRange with ordering validation, safe str::get slicing, ASCII/reversed/UTF-8/bounds/empty-range tests. CLI and all existing package files remain unchanged. No new package, dependency, FileId, workspace, workflow, or fixture.
+
+**Visual:** static UTF-8 byte-boundary diagram for aé! appears at its first explanation. All data is described in prose; no custom interaction or routine browser/screenshots.
+
+**Checks observed for 4.1:** current official library-target/method/tuple-struct/str::get references checked; all four reader reference URLs/fragments resolve. Initial and added source blocks reconstruct the complete listing as text. UTF-8 fixture bytes and diagram columns checked; corrected a single spacing error in the character row. Site check reported zero diagnostics and build succeeded with existing optional-content/sitemap notices. Nine local pages return HTTP 200; local links and anchors resolve. All five rlox files match HEAD and lib.rs does not exist. No proposed Rust commands, temporary implementation, or compilation. git diff --check passed; no browser/screenshots.
+
+**Implementation evidence:** followed the displayed route in order: created lib.rs from the initial listing, added slice and initial tests, ran cargo test --lib; added the UTF-8 test and reran; added bounds/empty-range checks and reran; then ran full cargo test and the CLI. All stages matched the text: four final library tests and five binary tests pass; doc-tests contain no cases. Formatting and Clippy with warnings denied pass. lib.rs matches the complete listing byte for byte; main, manifest, lockfile, fixture, and ignore file match HEAD. Independent CLI check confirmed exact source stdout, empty stderr, and exit 0. No manuscript correction needed; no repeated site/browser checks. Existing macOS toolchain only; no minimum-version or cross-platform verification.
+
+**Review focus:** matching text/library, the two levels of range validation, and unchanged CLI behavior. No unfinished implementation work remains within 4.1; the combined endpoint is accepted.
+
 ## Handoff
 
-Accepted starting point: Section 3.2 Rust/manifest/lockfile/tests. Current authorized action: commit the accepted endpoint, then outline Chapter 4 section boundaries for review. No Chapter 4 manuscript or implementation is authorized. No push or publication.
+Accepted starting point: Section 4.1 library and unchanged Chapter 3 CLI. Current authorized action: commit the accepted endpoint, then draft Section 4.2 for text review. No push or publication authorized.
 
 **Status meanings:** Proposed = described but not authorized; In progress = authorized work underway; Ready for review = delivered evidence awaiting user judgment, with phase stated; Revision requested = current work remains active; Accepted = explicit user approval with conversation evidence recorded.

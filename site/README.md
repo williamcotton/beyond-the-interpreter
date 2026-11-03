@@ -32,7 +32,10 @@ route are verified and accepted. Current invocation:
 `cargo run -- source hello.lox` from rlox/. Section 3.2 is a text draft at
 `src/content/docs/chapter-3/3.2-clap.mdx`, served at `/chapter-3/3.2-clap/`.
 Its text is approved, and its Clap dependency, manifest/lockfile, Rust, and
-migrated tests match the verified instructions and are accepted.
+migrated tests match the verified instructions and are accepted. Section 4.1
+is at `src/content/docs/chapter-4/4.1-byte-ranges.mdx`, served at
+`/chapter-4/4.1-byte-ranges/`. Its text is approved and matching library/tests
+are verified and accepted. The CLI remains unchanged.
 
 Astro and Starlight provide the publication; Starlight includes MDX support.
 The React integration and strict TypeScript configuration support future

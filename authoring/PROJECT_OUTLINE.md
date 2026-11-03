@@ -182,6 +182,15 @@ Use currently supported actions and security-conscious permissions.
 
 **Checkpoint:** Modular Rust project with passing CI.
 
+**Working section frame:** accepted when the user requested starting 4.1 after reviewing this breakdown. These boundaries remain adjustable through actual writing and review:
+
+- **4.1 — Locate text with byte ranges:** begin with selecting a fragment from an actual UTF-8 source string. Introduce handwritten `TextSize` and half-open `TextRange`, reject reversed ranges, and safely obtain text only when bounds and UTF-8 boundaries permit it. Use a small library target in the existing package (`rlox/src/lib.rs`) so the coordinate API has its own tested public boundary without moving the CLI yet. Cover ASCII, multibyte text, empty ranges, and end-of-file. Distinguish a numerically ordered range from a valid slice of a particular source. A small byte-boundary illustration should answer why a character can occupy more than one byte; no custom interactive component is needed.
+- **4.2 — Identify the source file:** show two files with the same numeric range but different text. Introduce `FileId` and `SyntaxOrigin` to associate coordinates with a source identity, and test that distinction. Keep these in the existing text library; do not build path interning, a virtual filesystem, a document database, or editor revisions. Assignment of IDs and source lookup remain explicit in the example; an ID is not proof that a file exists.
+- **4.3 — Extract the workspace:** move the working CLI into `rlox/crates/app` (`rlox-app`) and the tested coordinate library into `rlox/crates/text` (`rlox-text`). Preserve the executable name `rlox`, `source FILE` behavior, fixture location, and commands from the workspace root. Teach manifests, member selection, the shared lockfile/target directory, library visibility, and test commands as part of this concrete move. Preserve the accepted listings and lockfile transition. Do not add unused app dependencies or future crates to complete a diagram.
+- **4.4 — Run the checks automatically:** introduce the first root `.github/workflows/ci.yml` for the Rust workspace. Run formatting, Clippy with warnings denied, and workspace tests from `rlox/`; teach the working directory and trigger behavior. Check currently supported actions/toolchain setup and minimal permissions when authoring the section. Verify the exact commands locally; claim passing hosted CI only after an authorized GitHub push and an observed successful run.
+
+**Chapter boundary:** keep the source-display CLI unchanged. Test source-coordinate behavior where introduced; workspace moves and CI add no language behavior. No Rowan, scanner, LSP coordinates, generic offset-arithmetic framework, repository creation, push, or publication is implied. Exact APIs, action pins, and reconstruction steps are to be authored and verified per section. No permanent section count is established.
+
 ---
 
 # Part II — From Text to Syntax
