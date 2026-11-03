@@ -61,6 +61,7 @@ export default defineConfig({
             { label: '7.1 · Replace the scanning mechanics', link: '/chapter-7/7.1-logos/' },
             { label: '7.2 · Complete the punctuation', link: '/chapter-7/7.2-punctuation/' },
             { label: '7.3 · Tell keywords from names', link: '/chapter-7/7.3-keywords/' },
+            { label: '7.4 · Recognize number spellings', link: '/chapter-7/7.4-numbers/' },
           ],
         },
       ],

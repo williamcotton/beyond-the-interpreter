@@ -74,6 +74,8 @@ pub enum SyntaxKind {
     Var,
     #[token("while")]
     While,
+    #[regex(r"[0-9]+(\.[0-9]+)?")]
+    Number,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     Identifier,
     #[regex(r"[ \t\r\n]+")]
@@ -241,12 +243,12 @@ mod tests {
     }
 
     #[test]
-    fn identifier_rules_preserve_unsupported_characters() {
+    fn number_and_name_boundaries_preserve_unknown_characters() {
         assert_eq!(
             scan("2aé_b"),
             vec![
                 Token {
-                    kind: SyntaxKind::Error,
+                    kind: SyntaxKind::Number,
                     range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
                 },
                 Token {
@@ -333,6 +335,10 @@ mod tests {
             "class classify",
             "if(if_1)",
             "return // print\nprinter",
+            "0 001 123.456",
+            "123. .5 -12 +3.5 1.2.3",
+            "123abc a2",
+            "print 0.5;//é\n123.",
         ] {
             let mut offset = 0;
             let mut reconstructed = String::new();
@@ -581,5 +587,66 @@ mod tests {
         assert_eq!(tokens[0].range.slice(source), Some("print"));
         assert_eq!(tokens[1].range.slice(source), Some(" "));
         assert_eq!(tokens[2].range.slice(source), Some("printer"));
+    }
+
+    #[test]
+    fn recognizes_number_spellings() {
+        for source in ["0", "123", "001", "0.5", "123.456", "00.50"] {
+            let tokens = scan(source);
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Number,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+            assert_eq!(tokens[0].range.slice(source), Some(source));
+        }
+    }
+
+    #[test]
+    fn numbers_leave_dots_signs_and_names_separate() {
+        for (source, expected) in [
+            (
+                "123.",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Dot, 3, 4)],
+            ),
+            (
+                ".5",
+                vec![(SyntaxKind::Dot, 0, 1), (SyntaxKind::Number, 1, 2)],
+            ),
+            (
+                "-12",
+                vec![(SyntaxKind::Minus, 0, 1), (SyntaxKind::Number, 1, 3)],
+            ),
+            (
+                "+3.5",
+                vec![(SyntaxKind::Plus, 0, 1), (SyntaxKind::Number, 1, 4)],
+            ),
+            (
+                "1.2.3",
+                vec![
+                    (SyntaxKind::Number, 0, 3),
+                    (SyntaxKind::Dot, 3, 4),
+                    (SyntaxKind::Number, 4, 5),
+                ],
+            ),
+            (
+                "123abc",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Identifier, 3, 6)],
+            ),
+            ("a2", vec![(SyntaxKind::Identifier, 0, 2)]),
+        ] {
+            let tokens = scan(source);
+            assert_eq!(tokens.len(), expected.len(), "{source}");
+            for (token, (kind, start, end)) in tokens.iter().zip(expected) {
+                assert_eq!(token.kind, kind, "{source}");
+                assert_eq!(
+                    token.range,
+                    TextRange::new(TextSize(start), TextSize(end)).unwrap(),
+                    "{source}"
+                );
+            }
+        }
     }
 }
