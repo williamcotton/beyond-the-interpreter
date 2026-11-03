@@ -115,3 +115,8 @@ replacing scanner mechanics with Logos, with a baseline regression run before
 the migration. Text is approved; matching Logos implementation, baseline
 comparison and local checks pass. The section and matching scanner, including
 the corrected greedy-comment option, are accepted.
+
+Section 7.2 is drafted at `src/content/docs/chapter-7/7.2-punctuation.mdx`,
+served at `/chapter-7/7.2-punctuation/`. It completes fixed punctuation and
+comparison rules with boundary/reconstruction checks. The section and
+matching Rust are accepted; local checks pass.

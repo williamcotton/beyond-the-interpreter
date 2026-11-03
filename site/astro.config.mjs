@@ -59,6 +59,7 @@ export default defineConfig({
           label: '7 · From Handwritten Scanning to Logos',
           items: [
             { label: '7.1 · Replace the scanning mechanics', link: '/chapter-7/7.1-logos/' },
+            { label: '7.2 · Complete the punctuation', link: '/chapter-7/7.2-punctuation/' },
           ],
         },
       ],
