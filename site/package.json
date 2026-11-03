@@ -1,0 +1,28 @@
+{
+  "name": "beyond-the-interpreter-site",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.23.4"
+  },
+  "scripts": {
+    "dev": "astro dev --host localhost --port 4321",
+    "check": "astro check",
+    "build": "astro build",
+    "preview": "astro preview --host localhost --port 4321"
+  },
+  "dependencies": {
+    "@astrojs/react": "7.1.2",
+    "@astrojs/starlight": "0.42.8",
+    "astro": "7.4.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.12",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "6.0.3"
+  }
+}

@@ -1,0 +1,107 @@
+---
+title: Introduction
+description: Build a language, then the tools that bring it to life. An interactive Rust companion to Crafting Interpreters.
+---
+
+<p className="book-subtitle">Building Modern Language Tools in Rust</p>
+
+<p className="opening">A program begins as text. Somehow, that text becomes a running computation, a useful error message, or a name you can jump to in your editor. We’re going to build the machinery that makes those things happen.</p>
+
+Consider this little program:
+
+```text title="A little Lox"
+var answer = 6 * 7;
+print answer;
+```
+
+It’s easy to predict the result: `42`. Getting a computer to that answer raises
+some interesting questions. How does it recognize `answer` as a name and `*` as
+an operation? How does it remember the value of a variable? What happens if we
+leave out the right-hand side of the multiplication?
+
+Now put the same program in an editor. We’d like to underline that missing
+expression, find the declaration of `answer`, or pause execution before it gets
+printed. Each tool needs to understand something about the program. Much of
+that understanding can come from the same code.
+
+That is the journey of this book. We’ll implement Lox in Rust, then build the
+tools that help someone work with it.
+
+## A companion to Crafting Interpreters
+
+Robert Nystrom’s [*Crafting Interpreters*](https://craftinginterpreters.com/)
+shows how to build two implementations of Lox: a tree-walk interpreter in Java
+and a bytecode virtual machine in C. It makes the machinery of a language
+something you can write, run, and understand.
+
+We’ll use the same language and take that hands-on approach into Rust. Along
+the way, we’ll follow questions that become especially interesting when a
+language needs tools around it. How can a syntax tree retain comments and
+unfinished code? How do we turn a source range into an editor underline? What
+must an interpreter remember so a debugger can stop it and then let it continue?
+
+You can read the books together. We’ll link to the relevant discussions in
+*Crafting Interpreters* as we reach them, and explain the decisions needed for
+our Rust implementation here. If Lox is new to you, Nystrom’s
+[tour of the language](https://craftinginterpreters.com/the-lox-language.html)
+is a useful first look.
+
+## What we’ll build
+
+Our executable will be called `rlox`. It will grow from a small program that
+reads source into a toolchain you can use from a terminal and an editor.
+
+We’ll begin by recognizing tokens and arranging them into syntax trees. Being
+able to inspect those structures gives us something concrete to compare with
+our expectations. We’ll preserve the original text, including the parts that
+don’t yet form a valid program, so the same foundation can support editing.
+
+Then we’ll give the program behavior. A tree-walk interpreter will evaluate
+expressions and grow to support variables, control flow, functions, closures,
+classes, and inheritance. A second execution engine will compile Lox to bytecode
+and run it on a virtual machine. We’ll see what changes when execution becomes
+a sequence of instructions operating on a stack.
+
+Around those engines, we’ll build diagnostics, editor services, and a debugger
+that controls a running program. A thin VS Code extension will connect the
+editor to our Rust tools through the Language Server Protocol and Debug Adapter
+Protocol. We’ll also test, measure, and package what we build so someone else
+can use it.
+
+Those capabilities give us a destination. Each new piece will enter the code
+when we have a concrete problem for it to solve.
+
+## Learning Rust as we go
+
+You should be comfortable programming in another language. You don’t need to
+have written a compiler, and you don’t need to arrive knowing advanced Rust.
+
+We’ll explain Rust where it matters to the program in front of us. Tokens will
+give enums a job. Source text will make ownership and borrowing concrete.
+Trees, environments, and values will bring their own questions about how data
+is represented and how long it lives. We’ll link to precise sections of
+[the Rust Book](https://doc.rust-lang.org/book/) for further reading while
+explaining the reasoning our implementation needs.
+
+Libraries will be part of that story too. We’ll handwrite small mechanisms
+where doing so makes them understandable, then adopt libraries when their
+capabilities become useful. We’ll continue to write our own grammar and
+language behavior, and explain which responsibilities a library takes over.
+
+## How to read this book
+
+Keep an editor and a terminal nearby. The main path will show the code you need
+and where it belongs, with complete resulting files available for comparison.
+Try the examples, change an input, and predict what the tool will do before you
+run it.
+
+Diagrams and interactive explanations will help us inspect things that are hard
+to see in a listing: a scanner deciding whether to consume another character,
+a parser building a tree, or a closure holding on to a value after a call
+returns. We’ll use them where they help answer the question at hand.
+
+Optional exercises will invite you to explore further. The required route will
+remain complete without them, so you can return from an experiment and keep
+building the same program.
+
+<p className="closing">We’ll start with a source file. By the end, we’ll have built the tools to understand it, run it, and see what happens inside.</p>
