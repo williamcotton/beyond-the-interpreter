@@ -1,0 +1,272 @@
+---
+title: 2.3 — Explain input failures
+slug: chapter-2/2.3-input-errors
+description: Replace input panics with useful error messages and deliberate failure exits.
+prev:
+  link: /chapter-2/2.2-read-source/
+  label: 2.2 · Read the source
+next: false
+---
+
+<p className="book-subtitle">Chapter 2 · Reading Source</p>
+
+Reading a source file works, but a typo in the command still produces a Rust
+panic report. Someone using `rlox` needs to know what to fix: supply a filename,
+remove an extra argument, or check a path. We’ll make those outcomes part of
+our program’s behavior.
+
+Start from [Section 2.2](/chapter-2/2.2-read-source/), including `hello.lox`.
+Keep the terminal in **`rlox/`**. Try leaving out the filename:
+
+```sh
+cargo run --quiet --
+```
+
+This is an **intentional failure**. The current program panics with
+`expected a file`. We’ll replace that report with an instruction:
+
+```text title="Desired error message"
+Usage: rlox <file>
+```
+
+The angle brackets indicate a value to supply. A real command is
+`cargo run --quiet -- hello.lox`; don’t type the brackets.
+
+## Make the filename rule explicit
+
+Our rule is **exactly one filename**. Section 2.1 selected the first argument
+and ignored everything after it. We now need to consider the entire list.
+We’ll put that decision in a function that receives arguments as data. It
+won’t read the environment, open a file, or print anything.
+
+First, consider its input. `Vec<String>` is a vector: an owned, ordered
+collection of strings. Instead of taking ownership of that collection, our
+function will borrow its elements through `&[String]`. This type is a
+**slice**—a view of a sequence, carrying both access to the elements and its
+length. The function can inspect those strings without copying them.
+
+For the result, we’ll use `Option<&str>`. The `&str` is a borrowed view of text;
+it lets us return the selected filename without creating another `String`.
+`Some(...)` means the argument count was valid, while `None` means the caller
+should explain how to invoke the program. The returned text borrows from the
+input, so the argument collection must remain alive while we use it. Rust
+checks that relationship for us.
+
+Add this function **after `main` in `rlox/src/main.rs`**:
+
+```rust title="rlox/src/main.rs · add after main"
+fn filename_from_args(args: &[String]) -> Option<&str> {
+    if args.len() != 1 {
+        return None;
+    }
+
+    Some(&args[0])
+}
+```
+
+The parameter name appears before its type: `args: &[String]`. The `->` gives
+the return type. `len()` counts elements; `!=` means “not equal.” If the count
+is wrong, `return None;` ends this function immediately.
+
+Only after that check do we select element `0`. Indexing an empty collection
+would panic, but the guard has established that exactly one element exists.
+`&args[0]` borrows its string, and Rust supplies the `&str` view required by
+our return type. The final expression has no semicolon: its value becomes
+the function’s result, wrapped in `Some`.
+
+The Rust Book covers [vectors](https://doc.rust-lang.org/book/ch08-01-vectors.html)
+and [slices](https://doc.rust-lang.org/book/ch04-03-slices.html) in more detail.
+Here they give the filename rule an input we can inspect independently of
+a running process.
+
+## Let main handle the outcome
+
+Now we need to collect the arguments and act on the helper’s result. Use
+`skip(1)` to leave out the executable name, then `collect()` to gather all
+remaining strings. The annotation `Vec<String>` tells Rust which kind of
+collection to build. Unlike `nth(1)`, this keeps the extra arguments available
+for our count check.
+
+A [`match`](https://doc.rust-lang.org/book/ch06-02-match.html) chooses code
+according to a value’s variant. For `Some(filename)`,
+we’ll use the borrowed filename. For `None`, we’ll print the usage message and
+stop before trying to read any file.
+
+Errors belong on **standard error**, or **stderr**. The source text stays on
+**standard output**, or **stdout**. They may appear in the same terminal, but
+keeping them separate lets a shell or another program distinguish data from
+diagnostics. `eprintln!` writes a line to stderr, just as `println!` writes a
+line to stdout.
+
+A message alone doesn’t tell the caller whether the command succeeded. We’ll
+return `std::process::ExitCode` from `main`. Its `FAILURE` and `SUCCESS` values
+represent unsuccessful and successful termination. A `use` declaration lets
+us write `ExitCode` instead of its full standard-library path each time.
+
+Make these edits to **`rlox/src/main.rs`**, keeping the helper below `main`.
+Finish this edit group before running again:
+
+```diff title="rlox/src/main.rs · import and main"
+-fn main() {
+-    let filename = std::env::args().nth(1).expect("expected a file");
++use std::process::ExitCode;
++
++fn main() -> ExitCode {
++    let args: Vec<String> = std::env::args().skip(1).collect();
++    let filename = match filename_from_args(&args) {
++        Some(filename) => filename,
++        None => {
++            eprintln!("Usage: rlox <file>");
++            return ExitCode::FAILURE;
++        }
++    };
+     let source = std::fs::read_to_string(&filename).expect("could not read source file");
+     print!("{source}");
++    ExitCode::SUCCESS
+ }
+```
+
+Passing `&args` borrows the vector as the slice our helper expects. Inside the
+`match`, `Some(filename)` binds the text returned by the helper; the expression
+after `=>` supplies it to the outer `let filename`. The `None` arm returns from
+`main` instead. A `match` used in a `let` assignment ends with a semicolon.
+
+The `return ExitCode::FAILURE;` is an early exit. On the successful path, the
+last expression in `main` is `ExitCode::SUCCESS`, again without a semicolon.
+We still have the temporary file-read panic at this intermediate endpoint;
+we’ll replace it below.
+
+Try both invalid argument counts:
+
+```sh
+cargo run --quiet --
+cargo run --quiet -- hello.lox other.lox
+```
+
+Each command should exit unsuccessfully and write only this message to stderr:
+
+```text title="Standard error · each invalid command"
+Usage: rlox <file>
+```
+
+The second command now rejects the extra filename instead of silently ignoring
+it. Neither command should print source text or a panic report. Recover with:
+
+```sh
+cargo run --quiet -- hello.lox
+```
+
+It should still print `print "Hello, Lox!";` followed by the file’s newline.
+
+## Explain a failed read
+
+Our argument count can be correct while the file is missing. We already get
+that distinction from `Result`: `Ok` contains the source, and `Err` contains
+the reason reading failed. Instead of letting `expect` panic, we’ll match those
+variants ourselves.
+
+Keep the source from `Ok(source)`. For `Err(error)`, include the filename and
+the error’s readable message in a diagnostic, then return a failure status.
+The `{error}` format capture uses the I/O error’s display form, rather than
+the debug details we saw in the panic.
+
+Replace just the read statement in **`main`**:
+
+```diff title="rlox/src/main.rs · read result"
+-    let source = std::fs::read_to_string(&filename).expect("could not read source file");
++    let source = match std::fs::read_to_string(filename) {
++        Ok(source) => source,
++        Err(error) => {
++            eprintln!("rlox: could not read '{filename}': {error}");
++            return ExitCode::FAILURE;
++        }
++    };
+     print!("{source}");
+     ExitCode::SUCCESS
+```
+
+The filename is now a borrowed `&str`, so pass it directly; the extra `&` from
+our earlier owned-string call is unnecessary. The string remains available
+for the error message. On success, the `match` supplies the owned source
+`String`, and printing continues as before.
+
+<details>
+<summary>Complete rlox/src/main.rs</summary>
+
+```rust title="rlox/src/main.rs · complete file"
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let filename = match filename_from_args(&args) {
+        Some(filename) => filename,
+        None => {
+            eprintln!("Usage: rlox <file>");
+            return ExitCode::FAILURE;
+        }
+    };
+    let source = match std::fs::read_to_string(filename) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("rlox: could not read '{filename}': {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    print!("{source}");
+    ExitCode::SUCCESS
+}
+
+fn filename_from_args(args: &[String]) -> Option<&str> {
+    if args.len() != 1 {
+        return None;
+    }
+
+    Some(&args[0])
+}
+```
+
+</details>
+
+Choose a path that does not exist. Assuming `missing.lox` is absent from
+`rlox/`, run:
+
+```sh
+cargo run --quiet -- missing.lox
+```
+
+This is still an **intentional failure**, but it should now be an ordinary
+error message, with an unsuccessful exit and empty stdout. The stderr line
+begins:
+
+```text title="Standard error · prefix"
+rlox: could not read 'missing.lox':
+```
+
+The operating system’s error text follows that prefix. Its wording varies
+across platforms; we should see the path and a reason, without a panic report.
+The same branch reports other read errors, including invalid UTF-8 contents.
+
+Check both usage failures again, then recover with a valid command:
+
+```sh
+cargo run --quiet --
+cargo run --quiet -- hello.lox other.lox
+cargo run --quiet -- hello.lox
+```
+
+The source output should be unchanged. Our handling now distinguishes an
+invalid command from a failed read, and both failures stop before source is
+printed.
+
+The Rust Book’s
+[error-handling refactoring](https://doc.rust-lang.org/book/ch12-03-improving-error-handling-and-modularity.html)
+and [stderr discussion](https://doc.rust-lang.org/book/ch12-06-writing-to-stderr-instead-of-stdout.html)
+expand on these choices. The standard-library
+[`ExitCode` documentation](https://doc.rust-lang.org/std/process/struct.ExitCode.html)
+explains returning a status from `main`. *Crafting Interpreters* discusses
+reporting errors and signaling failure in
+[§4.1.1, “Error handling”](https://craftinginterpreters.com/scanning.html#error-handling).
+
+The filename policy now lives in a function that only inspects its input.
+Next, we’ll test that rule directly, without starting another process or
+opening a file.

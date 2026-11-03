@@ -13,8 +13,8 @@ Section 1.1 demonstrates a code introduction, a meaningful one-line edit, comple
 
 ## Actual repository and capabilities
 
-- `site/`: Astro/Starlight publication with MDX, React integration, and strict TypeScript. The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; the proposed Section 1.2 was removed after scope review. Section 2.1 and its matching Rust endpoint are accepted; Section 2.2 and its matching Rust/sample are accepted; navigation includes those two Chapter 2 pages. Starlight supplies listings and a focused diff; no custom diff viewer or trace framework exists.
-- `rlox/`: one binary package named `rlox`, Rust edition 2024, no external dependencies. It reads the first supplied filename as UTF-8 and prints its contents without adding a newline. Missing input or a failed read intentionally panics; extra arguments are ignored at this lesson endpoint. Files are Cargo.toml, Cargo.lock, src/main.rs, .gitignore, and hello.lox. It does not validate extra arguments, scan tokens, or execute Lox. There are zero Rust test cases.
+- `site/`: Astro/Starlight publication with MDX, React integration, and strict TypeScript. The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; the proposed Section 1.2 was removed after scope review. Section 2.1 and its matching Rust endpoint are accepted; Section 2.2 and its matching Rust/sample are accepted; Section 2.3 and its matching Rust are accepted. Navigation includes only authored pages. Starlight supplies listings and a focused diff; no custom diff viewer or trace framework exists.
+- `rlox/`: one binary package named `rlox`, Rust edition 2024, no external dependencies. It reads the first supplied filename as UTF-8 and prints its contents without adding a newline. Missing or extra arguments print usage to stderr and fail; failed reads print a contextual stderr diagnostic and fail. Successful reads return success. Files are Cargo.toml, Cargo.lock, src/main.rs, .gitignore, and hello.lox. It does not scan tokens or execute Lox. There are zero Rust test cases.
 - `authoring/`: current roadmap, architecture, review guidance, status, and brief. No fixtures/replay framework or future crate scaffold exists.
 - Hosted CI, deployment, release artifacts, distribution, and cross-platform coverage: not established.
 
@@ -120,8 +120,24 @@ The user rejected the proposed greeting-process-test section as offering too lit
 
 **Review focus:** the matching section, main, and sample; confirm the file-to-source step and deliberately temporary failure behavior read clearly. No unfinished implementation work remains within 2.2; the user accepted the combined endpoint.
 
+## CH02-03 — Explain input failures
+
+**Authorization:** the user accepted 2.2 and requested a commit followed by Section 2.3. Committed the accepted endpoint and supporting guidance as `9520c43` (`feat: pair section 2.2 with source file reading`) before drafting. The proportional presentation-check rule is included. No push or publication.
+
+**Status:** Accepted when the user said “great, commit and move on to 2.4.” The matching implementation and ordered reader route are verified; commit closeout and the next text phase are authorized.
+
+**Scope:** one manuscript page, navigation, and author records. Implements exactly-one-filename policy in a small borrowed-input function, Option/Result matching, usage and contextual read diagnostics on stderr, and ExitCode from main. Main stays in the same binary; no module, dependency, test, or new fixture. The intermediate endpoint retains the read panic until the next focused edit replaces it. No Rust edits or temporary compilation during text review.
+
+**Visual approach:** existing listings, focused diffs, and terminal contrasts suffice. No new layout, component, or navigation behavior; only another page/link in the existing structure. Following AGENTS.md and the user’s usage preference, no routine browser or screenshot inspection.
+
+**Checks observed for 2.3:** current official ExitCode, iterator collection, Vec/slice conversion, Rust Book slices/match/error handling/stderr, and Crafting Interpreters error-handling references checked. All seven manuscript reference links/fragments resolve. String-based edit validation applies the helper addition and both focused diffs to actual 2.2 and yields the complete final listing; this is source consistency evidence, not compilation or reader-route verification. Site check reported zero diagnostics; build succeeded with the existing optional-content/sitemap notices. Five local pages return HTTP 200 and local links/anchors resolve. All five rlox files match HEAD; no proposed Rust commands or temporary compilation occurred. git diff --check passed.
+
+**Implementation evidence:** executed the displayed route from actual 2.2: observed baseline no-input panic; added the helper; applied the first main edit; ran both usage failures and successful recovery; replaced the read statement; ran the missing-file failure, both usage failures again, and final recovery. All matched. Intermediate direct checks confirmed usage on stderr with exit 1 and empty stdout, while read failure still panicked as labeled. Final direct checks confirmed exact usage stderr/exit 1, contextual read stderr/exit 1 without panic text, empty stdout on failures, and byte-exact successful output/empty stderr/exit 0. Extra-argument validation precedes I/O. Spaced paths, empty/no-final-newline/UTF-8/CRLF source, and invalid UTF-8 were checked with temporary files outside the repository. No manuscript correction was needed. Main matches the complete listing; manifest, lockfile, ignore file, and hello.lox match HEAD. Formatting, Clippy with warnings denied, and Cargo test passed (zero cases). No new test harness or cases added. Verification used the existing macOS toolchain; other platforms and permission-denied behavior remain unverified. No browser/screenshots or unchanged site checks repeated.
+
+**Review focus:** matching text and Rust, especially the helper’s argument rule and useful terminal failure behavior. No unfinished implementation work remains in 2.3; the combined endpoint is accepted.
+
 ## Handoff
 
-Accepted starting point: Section 2.1’s filename-selection Rust endpoint in `3fa2dc9`. Current authorized action: commit the accepted Section 2.2 endpoint and supporting guidance, then draft Section 2.3 for text review. Preserve the accepted Rust endpoint while drafting. No push or publication is authorized.
+Accepted starting point: Section 2.2 source-reading Rust and hello.lox in `9520c43`. Current authorized action: commit accepted Section 2.3 and its matching Rust, then draft Section 2.4 for text review. Preserve the accepted implementation while drafting. No push or publication is authorized.
 
 **Status meanings:** Proposed = described but not authorized; In progress = authorized work underway; Ready for review = delivered evidence awaiting user judgment, with phase stated; Revision requested = current work remains active; Accepted = explicit user approval with conversation evidence recorded.

@@ -4,7 +4,7 @@
 
 An interactive Rust companion to Robert Nystrom’s *Crafting Interpreters*. Readers build `rlox`: two Lox execution engines and the tools to inspect, edit, debug, test, and distribute a language.
 
-The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; tests will enter in Chapter 2 alongside reading source. Section 2.1 and its matching Rust endpoint are accepted. Section 2.2 and its matching Rust/sample are accepted. The current program reads the supplied file and prints its source text. Later chapters describe planned work, not implemented capabilities.
+The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; tests will enter in Chapter 2 alongside reading source. Section 2.1 and its matching Rust endpoint are accepted. Section 2.2 and its matching Rust/sample are accepted. Section 2.3 and its matching Rust are accepted. The current program reads exactly one supplied file, prints its source text, and reports input errors on stderr with a failure status. Later chapters describe planned work, not implemented capabilities.
 
 ## Read the book locally
 
@@ -33,7 +33,7 @@ Expected program output:
 print "Hello, Lox!";
 ```
 
-The local endpoint was verified using rustc and Cargo 1.95.0 on macOS. Formatting, Clippy, and Cargo test passed; there are no Rust test cases yet. The ordered Section 2.2 route established source output, the intentional missing-file panic, and recovery. Direct execution checked exact output and UTF-8/error behavior; see authoring status for details. Fresh installation and other platforms have not been tested.
+The local endpoint was verified using rustc and Cargo 1.95.0 on macOS. Formatting, Clippy, and Cargo test passed; there are no Rust test cases yet. The ordered Section 2.3 route established usage/read diagnostics, failure status, unchanged successful output, and recovery. Direct execution checked exact output and UTF-8/error behavior; see authoring status for details. Fresh installation and other platforms have not been tested.
 
 ## How we work
 

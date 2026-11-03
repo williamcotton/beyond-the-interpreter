@@ -1,25 +1,27 @@
 # Current assignment
 
-## CH02-02 — Read the source (combined review)
+## CH02-03 — Explain input failures (combined review)
 
 **Status:** Accepted; commit closeout authorized.
 
-**Authorization:** after accepting and committing Section 2.1 and the site reorganization as `3fa2dc9`, the user requested moving on to 2.2. The user subsequently approved the text (“it reads great”) and explicitly authorized updating rlox to match.
+**Authorization:** the user accepted 2.2 and requested committing it, then moving to 2.3. The accepted endpoint and supporting guidance were committed as `9520c43`. The user subsequently approved the text (“ok, looks good”) and explicitly requested updating rlox.
 
-**Audience and question:** readers at the accepted filename-selection endpoint. How do we get the contents of the named file into our program?
+**Reader question:** how can someone running rlox tell what went wrong and how to fix it, without a Rust panic report?
 
-**Accepted starting point:** Section 2.1’s main selects/displays argument 1; no file I/O or tests. Its complete listing preserves that endpoint.
+**Accepted starting point:** main selects argument 1 with expect, reads UTF-8 source with expect, and prints it unchanged. hello.lox exists. Complete 2.1/2.2 listings preserve those endpoints.
 
-**Scope and behavior:** draft `site/src/content/docs/chapter-2/2.2-read-source.mdx`, update current navigation and author records. Teach creating `rlox/hello.lox`, borrowing the filename for `std::fs::read_to_string`, extracting a String from Result with temporary expect, and printing the source without an added newline. Only main and the tiny sample file changed during implementation. No module, manifest, helper, dependency, or abstraction is required.
+**Scope and behavior:** one manuscript page at `site/src/content/docs/chapter-2/2.3-input-errors.mdx`, navigation, and author records. Implement one pure argument-policy function in main.rs accepting borrowed strings and selecting exactly one filename. Collect arguments after the executable name, use Option matching for usage failures and Result matching for read failures, write errors to stderr, return ExitCode from main, preserve successful source output. No module, dependency, fixture, or manifest change.
 
-**Teaching sequence:** create a UTF-8 Lox sample; observe accepted code still prints its name; explain read_to_string, owned source versus filename, reference/borrowing, Ok/Err versus Some/None, temporary read-error panic, and print versus println; show focused diff and complete resulting file; inspect source output; explain relative paths, deliberately fail on an absent path, and recover using the existing sample. Source display is distinct from Lox execution.
+**Teaching sequence:** observe the current missing-input panic; define one-filename policy; explain the helper and its slice/string references; connect it to main through collection, match, and explicit exit status; check missing/extra inputs and successful source output; replace read expect with Result matching and contextual error text; deliberately fail on an absent path and recover. Provide complete final source and label the intermediate read panic until replaced. This is one bounded input-error improvement; human review must judge the new Rust reasoning and may request a split.
 
-**References:** official std::fs::read_to_string documentation, Rust Book Reading a File and References and Borrowing, and Crafting Interpreters §4.1 The Interpreter Framework. No version or dependency selected. The used filesystem API predates the current edition/toolchain. &str and ? need no artificial helper here; introduce them when a later edit uses them.
+**New Rust at use:** Vec<String>, skip/collect, borrowed &[String] and &str, function parameters/return types, length guard/indexing, Option/Result matching, early return, eprintln, ExitCode, tail expressions. No generic helper, explicit lifetimes, error type, library extraction, or ? propagation is required.
 
-**Visual approach:** paired source/output listings and focused diff answer what changed and what was read. No custom diagram or interaction is needed for this section.
+**References:** current official Rust Book vectors, slices, match, error-handling refactoring, and stderr; standard-library Iterator::collect, Vec slicing, and ExitCode; Crafting Interpreters §4.1.1 Error handling. Check API compatibility against the existing edition/toolchain without selecting new dependencies.
 
-**Verification:** prior text-phase checks covered official references, diff/listing consistency, site check/build, links, and rendered inspection. The implementation pass followed the displayed commands in order from 2.1, including baseline output, file-read output, missing-file failure, and recovery. Main and hello.lox exactly match their complete listings. Formatting, Clippy with warnings denied, and Cargo test passed (zero cases). Direct checks confirmed exact stdout and exit/stderr behavior, including empty/no-final-newline/UTF-8/CRLF inputs, spaced paths, invalid UTF-8, missing files, and missing arguments. No manuscript correction was needed. Verification used the existing macOS toolchain; other platforms and permission-denied behavior were not tested. No browser or screenshot checks repeated for this Rust-only pass, following the user’s usage preference now recorded in AGENTS.md.
+**Visual approach:** terminal contrasts and focused edits with complete resulting source suffice. No custom visual needed. Follow AGENTS.md’s proportional checks; routine manuscript/listing changes do not require screenshots or browser automation.
 
-**Excluded:** final errors/argument policy (2.3), tests (2.4), ? propagation, language execution, dependencies, future sections, commits, pushes, publication.
+**Checks observed:** official references and compatibility checked; both focused edits plus the added helper reconstruct the complete final listing from actual 2.2. Site check reported zero diagnostics and build succeeded with existing optional-content/sitemap notices. All five local pages and their links/anchors resolve; all seven manuscript reference URLs/fragments resolve. Rust and hello.lox match the accepted commit. No screenshots/browser automation or proposed Rust execution occurred. git diff --check passed. These were text-phase checks. The authorized implementation pass then followed the displayed route in order, including the baseline panic, helper addition, intermediate usage failures and recovery, final read-error handling, repeated usage failures, and final successful recovery. Every observation matched. Main exactly matches the complete listing. Formatting, Clippy with warnings denied, and Cargo test passed (zero cases). Direct executable checks verified exact stdout/stderr and exit status for usage/read failures and success, argument validation before I/O, source preservation, spaced paths, and invalid UTF-8. No manuscript correction was needed. Checks used the existing macOS toolchain; other platforms and permission-denied behavior were not tested.
 
-**Stopping point:** the user accepted the combined endpoint and requested committing it before moving to Section 2.3’s text phase. Commit this accepted work, including the requested proportional presentation-check guidance. No push or publication is authorized.
+**Excluded:** new test cases (2.4), new CLI features/flags, Clap, crate/module extraction, language execution, new dependencies, later sections, commits, pushes, publication.
+
+**Stopping point:** the user accepted Section 2.3 (“great”) and authorized committing it before drafting 2.4. Commit this accepted endpoint, then begin only the next text phase. No push or publication.
