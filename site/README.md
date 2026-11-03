@@ -42,11 +42,11 @@ types/tests are verified and accepted. Section 4.3 is at
 `src/content/docs/chapter-4/4.3-workspace.mdx`, served at
 `/chapter-4/4.3-workspace/`. Its text is approved and matching workspace
 migration is verified and accepted. rlox now contains app/text
-workspace packages with unchanged source and CLI behavior. Section 4.4 is a
-section at `src/content/docs/chapter-4/4.4-ci.mdx`, served at
+workspace packages with unchanged source and CLI behavior. Section 4.4 is
+authored at `src/content/docs/chapter-4/4.4-ci.mdx`, served at
 `/chapter-4/4.4-ci/`. Its reader workflow assumes the Rust repository root;
-our implemented root workflow runs Cargo from rlox/. Local checks pass; hosted
-verification is in progress.
+our implemented root workflow runs Cargo from rlox/. Local checks and hosted
+Rust CI pass; the combined endpoint is ready for review.
 
 Astro and Starlight provide the publication; Starlight includes MDX support.
 The React integration and strict TypeScript configuration support future

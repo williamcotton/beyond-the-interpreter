@@ -2,7 +2,7 @@
 
 ## CH04-04 — Run the checks automatically (implementation and hosted verification)
 
-**Status:** Local implementation verified; authorized commit/push and hosted verification in progress.
+**Status:** Ready for combined review. Implementation committed and pushed; hosted CI passed.
 
 **Authorization:** the user accepted 4.3 and requested committing it before 4.4. Accepted endpoint committed as `13c8e8e` (`feat: pair section 4.3 with app and text workspace`). During drafting, the user identified the reader/repository-root mismatch and approved separating the reader’s Rust repository from this book’s monorepo. The user confirmed our workflow belongs at this repository root, approved the text, and explicitly requested updating the codebase, pushing to origin, and observing CI from the CLI.
 
@@ -10,7 +10,7 @@
 
 **Scope:** manuscript at `site/src/content/docs/chapter-4/4.4-ci.mdx`, navigation and records. Propose one GitHub Actions job: checkout, stable Rust with rustfmt/Clippy, formatting, workspace Clippy, workspace tests. Keep Rust sources, manifests, lockfile, and CLI unchanged. No CI caches, matrix, deployment, artifacts, or extra helper scripts.
 
-**Root distinction (agreed):** the reader’s Rust workspace directory is their Git repository root. Their workflow is `.github/workflows/ci.yml` beside Cargo.toml and crates/, with shell steps at that root; no cd .. or working-directory: rlox. Our book repository contains site/, authoring/, and rlox/; its actual workflow will instead be `/Users/williamcotton/Projects/beyond-the-interpreter/.github/workflows/ci.yml` with this job setting:
+**Root distinction (agreed):** the reader’s Rust workspace directory is their Git repository root. Their workflow is `.github/workflows/ci.yml` beside Cargo.toml and crates/, with shell steps at that root; no cd .. or working-directory: rlox. Our book repository contains site/, authoring/, and rlox/; its actual workflow is `/Users/williamcotton/Projects/beyond-the-interpreter/.github/workflows/ci.yml` with this job setting:
 
 ```yaml
 defaults:
@@ -26,7 +26,7 @@ That is the sole authoring-layout adaptation to the reader workflow. Document an
 
 **Verification boundaries:** text phase checks YAML syntax/declared steps, action SHA/release provenance, documentation/links, site check/build, and unchanged actual Rust/workflow state. Text approval has now been followed by local implementation. After implementation authorization, write our adapted root workflow, validate the sole layout difference, run local checks, and prepare the concrete result for review. The current user request supplies explicit commit/push authorization. Only an observed passing run establishes hosted CI success.
 
-**Checks observed:** reader YAML parses with the existing site YAML parser; events, permission, checkout pin/input, runner, root directory, Rust setup, and all three exact check commands match the intended configuration. Confirmed official v7.0.1 tag/commit and runner/toolchain documentation; all seven reader reference URLs/fragments resolve. Site check reported zero diagnostics and build succeeded with existing optional-content/sitemap notices. Twelve local routes return HTTP 200 and local links/anchors resolve. All tracked rlox files match HEAD. Neither root nor nested actual CI workflow exists; no proposed Rust/check/setup/publication commands executed. git diff --check passed; no browser/screenshots. Hosted behavior and reader commit/push route remain unverified.
+**Text-phase checks observed:** reader YAML parses with the existing site YAML parser; events, permission, checkout pin/input, runner, root directory, Rust setup, and all three exact check commands match the intended configuration. Confirmed official v7.0.1 tag/commit and runner/toolchain documentation; all seven reader reference URLs/fragments resolve. Site check reported zero diagnostics and build succeeded with existing optional-content/sitemap notices. Twelve local routes return HTTP 200 and local links/anchors resolve. All tracked rlox files match HEAD. Neither root nor nested actual CI workflow exists; no proposed Rust/check/setup/publication commands executed. git diff --check passed; no browser/screenshots. Hosted behavior and reader commit/push route remain unverified.
 
 **Visual approach:** existing workflow listing and named job/step logs suffice; no custom UI or routine browser/screenshots.
 
@@ -34,4 +34,6 @@ That is the sole authoring-layout adaptation to the reader workflow. Document an
 
 **Excluded:** deployment, unrelated repository/remote changes, local global-toolchain changes, Chapter 5 authoring.
 
-**Stopping point:** push the concrete section/workflow changes, observe the CI run for that commit, resolve failures within scope, and deliver as Ready for combined review with actual hosted evidence. Do not begin Chapter 5.
+**Hosted evidence:** pushed `96d1d19` (`feat: pair section 4.4 with github actions workspace checks`) to origin/main. [Rust CI run 41619820330](https://github.com/williamcotton/beyond-the-interpreter/actions/runs/41619820330) completed successfully for that exact revision. Checkout, Rust setup, formatting, Clippy, and all eleven tests passed on Ubuntu 24.04.5 with rustc/Cargo 1.99.1. Verified run SHA, job/step conclusions, and logs using gh. No implementation or manuscript correction was needed.
+
+**Stopping point:** section and root workflow are Ready for combined review; await explicit user acceptance. No unfinished implementation work or observed CI failures remain. Do not begin Chapter 5.
