@@ -16,6 +16,8 @@ Use the roadmap’s chapter titles and sequence as the working plan. At chapter 
 
 A feature label or file count does not establish reasonable learning load. Recovery, representation changes, typed views, and diagnostics can hide several new reasoning problems even when the grammar is unchanged. Conversely, routine setup does not need a separate page for every action. Keep a visible path to useful behavior. Explain a real sequencing problem before proposing a roadmap change.
 
+Do not manufacture a section merely to fill a roadmap topic. Chapter 1 was accepted with only Section 1.1; a proposed greeting-test section introduced more machinery than its payoff warranted and was removed. Tests enter Chapter 2 with source-reading behavior. Git, README, and formatting do not require dedicated introductory sections; give supporting instructions where they serve the current work.
+
 ## Two review points in one authoring loop
 
 **Text phase.** Draft the current section with precise instructions and expected observations, without creating/updating Rust files or compiling a temporary version ahead of review. Check current official references and the existing accepted source; build and inspect the page. Present the actual rendered text for review of writing and scope. Expected output is provisional until followed in the implementation phase; keep that verification state in author records rather than padding the manuscript with caveats.

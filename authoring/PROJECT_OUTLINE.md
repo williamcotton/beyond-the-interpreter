@@ -55,15 +55,12 @@ Teach:
 - `main`.
 - `println!`.
 - Basic compilation.
-- Formatting.
-- Tests.
-- Git basics.
 
-Create a minimal README.
+**Accepted chapter boundary:** Chapter 1 is complete with Section 1.1, “A program we can run.” The user chose to stop at the greeting executable after reviewing the proposed testing section. No dedicated Git, README, testing, or formatting section is required here. Introduce formatting briefly when useful and introduce tests in Chapter 2 alongside behavior worth preserving.
 
 Do not introduce multiple crates or complex dependencies.
 
-**Checkpoint:** A working Rust binary with a passing basic test/build.
+**Checkpoint:** A working Rust binary whose files and greeting output match the section. No automated test cases are required at this endpoint.
 
 ## Chapter 2 — Reading Source
 
@@ -93,7 +90,9 @@ Teach:
 
 Improve initial error handling incrementally.
 
-**Checkpoint:** The executable reads `.lox` files and handles missing files.
+Introduce the first tests alongside source-reading behavior and useful input errors. Choose test boundaries to fit the mechanism being taught; a greeting-only process test is not a prerequisite. Do not add a test framework or new dependency before a concrete need appears.
+
+**Checkpoint:** The executable reads `.lox` files and handles missing files, with meaningful tests for the behavior introduced in this chapter.
 
 ## Chapter 3 — Commands and Clap
 

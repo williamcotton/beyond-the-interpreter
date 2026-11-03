@@ -4,7 +4,7 @@
 
 An interactive Rust companion to Robert Nystrom’s *Crafting Interpreters*. Readers build `rlox`: two Lox execution engines and the tools to inspect, edit, debug, test, and distribute a language.
 
-The introduction and Section 1.1 are accepted. The current Rust program prints `Hello from rlox!`; its files and behavior match the section. Later chapters describe planned work, not implemented capabilities.
+The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; tests will enter in Chapter 2 alongside reading source. The current Rust program prints `Hello from rlox!`; its files and behavior match the section. Later chapters describe planned work, not implemented capabilities.
 
 ## Read the book locally
 

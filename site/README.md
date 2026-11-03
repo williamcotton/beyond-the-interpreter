@@ -6,6 +6,9 @@ and served at `/foundations/a-third-lox/first-program/`. The section and matchin
 `rlox/` greeting program are accepted. Its instructions were followed successfully
 on the local machine; see
 [authoring status](../authoring/AUTHORING_STATUS.md) for checks and limits.
+Chapter 1 is complete with Section 1.1 only. The next chapter will introduce
+source reading and its first meaningful tests.
+
 Astro and Starlight provide the publication; Starlight includes MDX support.
 The React integration and strict TypeScript configuration support future
 explanations embedded in MDX. This introduction needs no client-side React.
