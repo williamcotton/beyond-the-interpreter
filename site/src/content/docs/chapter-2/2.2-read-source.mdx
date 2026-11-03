@@ -1,0 +1,162 @@
+---
+title: 2.2 — Read the source
+slug: chapter-2/2.2-read-source
+description: Open the selected file and bring its source text into the Rust program.
+prev:
+  link: /chapter-2/2.1-filename/
+  label: 2.1 · Give the program a filename
+next: false
+---
+
+<p className="book-subtitle">Chapter 2 · Reading Source</p>
+
+We can tell `rlox` which file we want, but it only repeats the name. The next
+step is to get the text inside that file into our program. We’ll print the text
+so we can see what we’ve read.
+
+Begin with the [completed Section 2.1](/chapter-2/2.1-filename/). Keep your
+terminal in **`rlox/`**; from the repository root, enter `cd rlox` first.
+
+## Give the filename some contents
+
+Create **`rlox/hello.lox`**, beside `Cargo.toml`, with this complete content:
+
+```text title="rlox/hello.lox · complete file"
+print "Hello, Lox!";
+```
+
+Save it as a UTF-8 text file, with a newline after the semicolon. This is a
+small Lox program: once we can execute Lox, it will print a greeting. For now,
+run our existing executable with its name:
+
+```sh
+cargo run --quiet -- hello.lox
+```
+
+It should still print:
+
+```text title="Program output before the edit"
+hello.lox
+```
+
+Creating a file hasn’t changed what our code does. We need to ask the operating
+system to open it and read its contents.
+
+## Read text from the file
+
+The standard library’s `std::fs` module provides filesystem operations.
+[`read_to_string`](https://doc.rust-lang.org/std/fs/fn.read_to_string.html)
+reads an entire file into an owned `String`. We’ll keep that string in a new
+binding named `source`; `filename` tells us where to read, while `source` holds
+what we read.
+
+We’ll pass `&filename` to the function. The `&` creates a **reference** to the
+existing string: the function can use the path without taking ownership of
+our `filename` value. This is called **borrowing**. It does not copy the
+filename or change its contents. Our binding still owns the filename after
+the call. The Rust Book’s
+[“References and Borrowing”](https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html)
+explores this relationship further.
+
+Opening a file can fail. The name might be wrong, or we might lack permission
+to read it. So `read_to_string` returns `Result<String, std::io::Error>`:
+`Ok(...)` carries the source string, and `Err(...)` carries information about
+an I/O error. Unlike the `Option` from argument selection, this result can
+explain why a value could not be obtained.
+
+For this step, we’ll use `expect("could not read source file")`. On success it
+gives us the string inside `Ok`. On failure it panics with our message and
+the error’s debug details. We’ll replace this temporary handling in the next
+section, alongside the missing-filename panic from 2.1.
+
+We also need to change the output. Use `print!` to display `source` without
+adding a newline of its own. Any newlines already in the file remain part of
+the string; `println!` would add another one. We want to inspect the text we
+read, including its existing line endings.
+
+In **`rlox/src/main.rs`**, replace the filename output with the read and source
+output:
+
+```diff title="rlox/src/main.rs · inside main"
+ fn main() {
+     let filename = std::env::args().nth(1).expect("expected a file");
+-    println!("{filename}");
++    let source = std::fs::read_to_string(&filename).expect("could not read source file");
++    print!("{source}");
+ }
+```
+
+Save the file. Its complete contents should now be:
+
+```rust title="rlox/src/main.rs · complete file"
+fn main() {
+    let filename = std::env::args().nth(1).expect("expected a file");
+    let source = std::fs::read_to_string(&filename).expect("could not read source file");
+    print!("{source}");
+}
+```
+
+Run the same command:
+
+```sh
+cargo run --quiet -- hello.lox
+```
+
+Expected program output:
+
+```text title="Program output after the edit"
+print "Hello, Lox!";
+```
+
+We should see the quotes, semicolon, and the word `print`. Those characters
+came from the file. Our Rust `print!` displays them; it doesn’t interpret the
+Lox statement. We now have the source text available for the language machinery
+we’ll build later.
+
+The Rust Book’s
+[“Reading a File”](https://doc.rust-lang.org/book/ch12-02-reading-a-file.html)
+uses the same standard-library operation. In *Crafting Interpreters*,
+[“The Interpreter Framework”](https://craftinginterpreters.com/scanning.html#the-interpreter-framework)
+introduces this file-to-source step in `runFile` before handing the text to
+further processing.
+
+## When the path does not exist
+
+The path `hello.lox` is relative to the program’s **current working directory**,
+which is `rlox/` for these commands. It isn’t relative to `src/main.rs` or to
+the compiled executable. If a file you created cannot be found, check the
+terminal directory and the path you supplied.
+
+To see the failure branch, choose a name that does not exist in `rlox/`.
+Assuming there is no `missing.lox` there, run this **intentional failure**:
+
+```sh
+cargo run --quiet -- missing.lox
+```
+
+The program should panic and exit unsuccessfully. Look for our message among
+the diagnostic text:
+
+```text title="Expected panic message · excerpt"
+could not read source file
+```
+
+The diagnostic also includes the underlying I/O error; its exact wording
+varies by operating system. We supplied an argument, so this failure comes
+from reading the file rather than selecting its name.
+
+Recover by returning to the file we created:
+
+```sh
+cargo run --quiet -- hello.lox
+```
+
+It should display the Lox source again. No source-code edits are needed.
+
+`read_to_string` also returns an error for file contents that are not valid
+UTF-8. We’ll use UTF-8 source files throughout the book. Reading a file into a
+`String` gives us owned text that remains available after the read finishes;
+we don’t need to keep an open file handle to use it.
+
+We can now bring a file’s contents into `rlox`. Next, we’ll make failures
+useful to someone at the terminal instead of leaving them with panic reports.

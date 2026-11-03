@@ -11,7 +11,7 @@ The user’s current instructions and existing authorization govern the task. `a
 ## Text first, then implementation
 
 1. Bound the current section in the brief: reader question/example, accepted starting state, behavior, exclusions, new Rust ideas, references, visual purpose, checks, and stopping point. Obtain approval for scope only when it has not already been authorized.
-2. Draft the section in MDX, explaining consequential edits before or beside them. Include complete instructions, code, and expected observations. Inspect the rendered page and submit the text and its scope for human review. Do not create or update the reader’s Rust files during this phase, even in a temporary implementation.
+2. Draft the section in MDX, explaining consequential edits before or beside them. Include complete instructions, code, and expected observations. Apply the proportional presentation checks below and submit the text and its scope for human review. Do not create or update the reader’s Rust files during this phase, even in a temporary implementation.
 3. Once the user is happy with the text and authorizes following it, start from the accepted endpoint and execute those exact instructions in order to create or update Rust. Verify generated files, displayed edits, commands, observations, expected failures, and recovery. The manuscript is the route to follow, not a summary to retrofit afterward.
 4. If that pass exposes an error or missing step, correct the manuscript and implementation together and recheck the affected route. Material changes to the teaching scope return to text review before dependent work.
 5. Deliver the actual rendered section and matching code as Ready for review, with observed checks and limits. Only the user’s acceptance makes it Accepted. Do not advance to the next section while corrections remain unresolved.
@@ -38,7 +38,9 @@ Text approval is not evidence of Rust correctness or final lesson acceptance. Ke
 
 ## Evidence and handoff
 
-Check official documentation and compatibility before adopting changing APIs or exact dependency versions. Check behavior and the reader’s ordered route separately; a final build or patch replay alone does not verify the route. Add validation infrastructure only for a concrete need. Inspect rendered changes; a build alone does not establish visual quality.
+Check official documentation and compatibility before adopting changing APIs or exact dependency versions. Check behavior and the reader’s ordered route separately; a final build or patch replay alone does not verify the route. Add validation infrastructure only for a concrete need.
+
+Keep presentation checks proportional to the change and conserve tool/model usage. For routine prose and code-listing edits using established components, use source/listing consistency, site checks/builds, and relevant link checks; do not routinely open a browser or take screenshots. Inspect rendered pages when layout, styling, navigation behavior, or interactive components change, when a concrete rendering problem is suspected, or when the user requests it. Limit visual inspection to the affected area and capture screenshots only when they resolve a specific question. This rule narrows blanket rendered-inspection requirements in authoring guidance; human review of the published text and Rust reader-route verification still apply.
 
 Keep accepted endpoints reconstructible beyond Git history alone. Complete code listings and ordered commands suffice for the first tiny endpoint; agree on stronger checkpoint storage before later edits would make earlier states inaccessible.
 

@@ -15,7 +15,10 @@ reading and its first meaningful tests. Its opening section is
 `src/content/docs/chapter-2/2.1-filename.mdx`, served at
 `/chapter-2/2.1-filename/`. Its text is approved, and the matching Rust changes and ordered reader route
 have been verified. Section 2.1 and its code are accepted;
-file reading and later sections have not been implemented.
+Section 2.2 adds file reading and is accepted. Its manuscript
+is `src/content/docs/chapter-2/2.2-read-source.mdx`, served at
+`/chapter-2/2.2-read-source/`. Rust and hello.lox match its complete listings;
+the ordered reader route is verified. Later sections have not been implemented.
 
 Astro and Starlight provide the publication; Starlight includes MDX support.
 The React integration and strict TypeScript configuration support future
