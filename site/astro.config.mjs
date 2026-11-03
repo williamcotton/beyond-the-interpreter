@@ -55,6 +55,12 @@ export default defineConfig({
             { label: '6.3 · Read a line comment', link: '/chapter-6/6.3-line-comments/' },
           ],
         },
+        {
+          label: '7 · From Handwritten Scanning to Logos',
+          items: [
+            { label: '7.1 · Replace the scanning mechanics', link: '/chapter-7/7.1-logos/' },
+          ],
+        },
       ],
       customCss: ['./src/styles/book.css'],
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },

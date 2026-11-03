@@ -370,6 +370,21 @@ Do not use trivia-skipping behavior that prevents lossless source reconstruction
 
 **Checkpoint:** Complete Lox lexer implemented through Logos.
 
+**Chapter 7 numbered authoring frame (accepted for drafting):** the user requested numbered sections. Begin from accepted Chapter 6, preserve its scanner API/ranges/trivia, and separate replacing existing mechanics from extending recognized syntax. The user approved starting 7.1 after reviewing these numbered boundaries; adjust them through actual text review:
+
+- **7.1 — Replace the scanning mechanics.** Add the verified Logos dependency and translate only existing kinds/rules. Explain derive, fixed patterns, regex rules, returned errors, and UTF-8 spans at need. Run accepted exact-token/range expectations before and after, preserve retained whitespace/comment rules and source coverage, then switch production scan to Logos. Retire the superseded handwritten loop once parity is established rather than carrying it through later feature lessons. No new lexical categories here.
+- **7.2 — Complete the punctuation.** Add the remaining Lox punctuation/operators, including comparison pairs. Teach fixed lexemes, longest matching, and adjacent-token boundaries using compact cases. Leave keywords, numbers, and strings for their own mechanisms.
+- **7.3 — Tell keywords from names.** Add exact reserved-word rules and explain their interaction with Identifier matching. Contrast for/forest and similar prefixes. Replace the old print-as-Identifier expectation explicitly; keep genuine identifier boundary tests. This introduces lexical categories, not execution or name resolution.
+- **7.4 — Recognize number spellings.** Match integers and decimal fractions as Number tokens without parsing/storing f64 values. Check required digits after the decimal point, a following dot, and boundaries such as 123. and .5. Signs remain separate operators. Update the formerly unsupported leading-digit case deliberately.
+- **7.5 — Keep strings together.** Recognize quoted strings, including multiline/UTF-8 contents, retaining delimiters and original bytes. Follow canonical Lox’s lack of escape processing. Teach unterminated-input error spans and progress here, with library-specific behavior checked before choosing the exact rule/callback. Propose one Error from opening quote through EOF for an unterminated string. Keep recovery small and errors as tokens; structured diagnostics belong later.
+
+Preserve one maintained syntax-kind definition where possible; avoid a manually synchronized second kind list. Select exact dependency version/API adaptations in 7.1’s text after current documentation/compatibility checks. Do not apply Logos trivia-skipping recipes. Compare error spans as well as successful tokens, and explain any discovered mismatch before changing the accepted contract.
+
+Keep regression and source-partition/reconstruction checks alongside every lesson. Chapter 6 expected results remain unchanged during migration; later keyword/number/string recognition requires explicit expectation changes at the responsible lesson. The proposed immediate retirement of the replaced loop refines the overview sequence above: later features belong only to the Logos scanner, with earlier handwritten states retained in the accepted manuscript.
+
+Visual purpose: relate source spelling, declarative rules and emitted kind/range; contrast a fixed keyword with a longer identifier and show number/string boundaries. Static annotated examples should suffice unless a specific question benefits from interaction. No JavaScript lexer, generic trace machinery, new CLI, parser, diagnostic crate, or extra tooling. Chapter 8 still introduces token inspection.
+
+
 ## Chapter 8 — Inspecting Tokens
 
 **Objective:** Build the first useful language tool.

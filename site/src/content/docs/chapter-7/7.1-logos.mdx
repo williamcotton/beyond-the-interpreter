@@ -1,0 +1,688 @@
+---
+title: 7.1 — Replace the scanning mechanics
+slug: chapter-7/7.1-logos
+description: Replace handwritten cursor movement with Logos rules while preserving token kinds, source ranges, trivia, and error behavior.
+prev:
+  link: /chapter-6/6.3-line-comments/
+  label: 6.3 · Read a line comment
+next: false
+---
+
+<p className="book-subtitle">Chapter 7 · From Handwritten Scanning to Logos</p>
+
+Our scanner can recognize `a_2!=other`. Its rules also manage a cursor:
+consume the first character, inspect the next, advance when it belongs to the
+token, and update the end offset. Identifiers, whitespace, and comments each
+contain a version of that growing loop.
+
+We can describe their spellings more directly. For example, an identifier is
+an ASCII letter or underscore followed by zero or more ASCII letters,
+digits, or underscores. **Logos** turns descriptions like that into scanning
+code at compile time. We’ll replace the mechanics while keeping the results:
+`Identifier [0, 3)`, `BangEqual [3, 5)`, and `Identifier [5, 10)`.
+
+Start from [Section 6.3](/chapter-6/6.3-line-comments/), with your terminal in
+**`rlox/`**. This section changes **`crates/syntax/Cargo.toml`** and
+**`crates/syntax/src/lib.rs`**. We’ll keep the same `SyntaxKind`, `Token`, and
+`scan(source: &str) -> Vec<Token>` boundary.
+
+## Check the behavior before replacing it
+
+Our existing tests describe more than successful recognition. They check
+trivia, UTF-8 boundaries, and exact source reconstruction. Keep those tests
+and their expected results unchanged during this migration.
+
+One additional case makes our error boundary explicit. The handwritten
+scanner emits one `Error` token per unsupported character. A replacement
+that groups adjacent unknown characters could still reconstruct the source,
+but it would change the token stream.
+
+Before adding Logos, append this test **inside the existing `mod tests` in
+`rlox/crates/syntax/src/lib.rs`, before its closing brace**. Keep the existing
+imports and tests:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append baseline regression"
+#[test]
+fn unknown_characters_remain_separate_tokens() {
+    assert_eq!(
+        scan("@é💥"),
+        vec![
+            Token {
+                kind: SyntaxKind::Error,
+                range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Error,
+                range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Error,
+                range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
+            },
+        ]
+    );
+}
+```
+
+`@` occupies one byte, `é` two, and `💥` four. Run the syntax tests **while the
+handwritten scanner is still in place**:
+
+```sh
+cargo test -p rlox-syntax
+```
+
+The named tests should report `ok`. We’ll run the same expectations after
+replacing the scanner. This gives us a concrete comparison without keeping
+two production scanners.
+
+## Add Logos to the syntax library
+
+Use Logos **0.16.1**. Its default features include the derive macro, so we
+need only one direct dependency. The [release manifest](https://github.com/maciejhirsz/logos/blob/v0.16.1/Cargo.toml)
+declares Rust 1.80.0 as its minimum; our existing edition-2024 workspace
+already requires a newer compiler. Keep the toolchain you’ve been using.
+
+Add the dependency to **`rlox/crates/syntax/Cargo.toml`**. Its complete
+content becomes:
+
+```toml title="rlox/crates/syntax/Cargo.toml"
+[package]
+name = "rlox-syntax"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+logos = "=0.16.1"
+rlox-text = { path = "../text" }
+```
+
+The leading `=` pins this direct dependency, as we did for Clap. Cargo will
+record the resolved dependency graph in the shared `rlox/Cargo.lock` when we
+run the tests after these edits.
+
+The following enum and scanner edits form one change. Finish them before
+running the tests again.
+
+## Put fixed spellings beside their kinds
+
+At the top of **`rlox/crates/syntax/src/lib.rs`**, import `Logos` before our
+text types:
+
+```diff title="rlox/crates/syntax/src/lib.rs · imports"
++use logos::Logos;
++
+ use rlox_text::{TextRange, TextSize};
+```
+
+Add `Logos` to the derive **on `SyntaxKind`**. Leave `Token`’s derive alone:
+
+```diff title="rlox/crates/syntax/src/lib.rs · SyntaxKind derive"
+-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum SyntaxKind {
+```
+
+We’ve used derives to obtain comparisons and debug formatting. This one
+generates a lexer implementation. Its helper attributes describe the input
+patterns for each kind. The Rust Book introduces
+[procedural derive macros](https://doc.rust-lang.org/book/ch20-05-macros.html#procedural-macros-for-generating-code-from-attributes).
+We’re using a derive, rather than writing a macro ourselves.
+
+Inside `SyntaxKind`, add `#[token(...)]` to the seven fixed-spelling variants,
+keeping their names and order:
+
+```rust title="rlox/crates/syntax/src/lib.rs · fixed-spelling variants"
+#[token("(")]
+LeftParen,
+#[token(")")]
+RightParen,
+#[token("/")]
+Slash,
+#[token("!")]
+Bang,
+#[token("!=")]
+BangEqual,
+#[token("=")]
+Equal,
+#[token("==")]
+EqualEqual,
+```
+
+These are literal spellings, so `(` doesn’t need to be escaped as a regular
+expression. The [token and regex attributes](https://logos.maciej.codes/attributes/token_and_regex.html)
+attach patterns to existing enum variants; there’s no second kind enum or
+conversion list to maintain.
+
+Logos can distinguish a fixed spelling from its longer match. `!=` becomes
+`BangEqual`, and `//` can start a comment rather than two slash tokens. Our
+existing tests already check these boundaries. The handbook’s
+[disambiguation discussion](https://logos.maciej.codes/token-disambiguation.html)
+explains how length and pattern specificity guide that choice.
+
+## Describe the growing tokens
+
+A **regular expression** describes a family of spellings. We need only
+character classes and repetition to express the rules we already wrote.
+
+Annotate `Identifier` like this:
+
+```rust title="rlox/crates/syntax/src/lib.rs · identifier rule"
+#[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
+Identifier,
+```
+
+`[A-Za-z_]` matches one ASCII letter or underscore. `[A-Za-z0-9_]` adds digits
+to that set, and `*` means zero or more repetitions. The first character is
+required; the continuation may be empty. This is the same start/continuation
+distinction as 6.1, not a new naming rule.
+
+The `r"..."` syntax is a Rust **raw string**: Rust passes backslashes through
+rather than interpreting them first. That matters in our next two patterns.
+Add this attribute to `Whitespace`:
+
+```rust title="rlox/crates/syntax/src/lib.rs · whitespace rule"
+#[regex(r"[ \t\r\n]+")]
+Whitespace,
+```
+
+The regex engine interprets `\t`, `\r`, and `\n` as tab, carriage return, and
+line feed. `+` means one or more characters from the class, so it groups a
+whole run and cannot produce an empty token. The set remains exactly the
+four whitespace characters from 6.2.
+
+Finally, annotate `LineComment`:
+
+```rust title="rlox/crates/syntax/src/lib.rs · comment rule"
+#[regex(r"//[^\n]*", allow_greedy = true)]
+LineComment,
+```
+
+The literal `//` is followed by zero or more characters other than line feed.
+Inside `[^\n]`, the leading `^` negates the class. An empty comment body is
+allowed, CR stays in the body, and LF remains for the whitespace rule. A
+comment can also reach EOF.
+
+Logos requires an explicit opt-in for this unbounded greedy character class.
+`allow_greedy = true` permits it: our rule deliberately consumes the whole
+comment body up to LF or EOF, and the class still excludes LF. The handbook
+explains this check under
+[greedy repetition](https://logos.maciej.codes/common-regex.html#common-performance-pitfalls).
+
+Keep the existing **`Error,`** variant after these rules, with **no pattern
+attribute**. We’ll select it when Logos reports an unmatched input. The enum
+still has exactly the same kinds as before.
+
+Whitespace and comments are ordinary returned kinds. We aren’t using skip
+attributes: losing trivia would violate our source-reconstruction contract.
+
+## Turn lexer results into our tokens
+
+Logos supplies the recognition and byte spans. Our `scan` function still
+needs to produce the project’s `Token` values and use `TextRange`.
+
+**Replace the entire existing `scan` function**, from its `pub fn scan` line
+through that function’s closing brace, with this version. Keep the `Token`
+definition above it and the test module below it unchanged:
+
+```rust title="rlox/crates/syntax/src/lib.rs · replace scan"
+pub fn scan(source: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+
+    for (result, span) in SyntaxKind::lexer(source).spanned() {
+        let kind = match result {
+            Ok(kind) => kind,
+            Err(()) => SyntaxKind::Error,
+        };
+        let range = TextRange::new(TextSize(span.start), TextSize(span.end))
+            .expect("Logos spans are ordered");
+
+        tokens.push(Token { kind, range });
+    }
+
+    tokens
+}
+```
+
+The import brings the `Logos` trait into scope, allowing
+`SyntaxKind::lexer(source)` to construct its lexer. The same import also
+makes the derive macro available.
+
+Calling [`spanned()`](https://docs.rs/logos/0.16.1/logos/struct.Lexer.html#method.spanned)
+gives an iterator of result/span pairs. Its item type is
+`(Result<SyntaxKind, ()>, Range<usize>)`: each successful result contains a
+kind, and each span has public `start` and `end` byte offsets. We wrap those
+offsets in the same coordinate types we already use. The constructor’s
+`expect` states the span-order invariant supplied by the lexer.
+
+An unmatched input returns `Err(())`. The empty tuple `()` carries no error
+payload; the accompanying span still tells us where the input occurred.
+We convert that result into our existing `SyntaxKind::Error`. It remains a
+token in the returned vector, so reconstruction includes those source bytes.
+We don’t add a second error representation or print a diagnostic here.
+
+For the CRLF example from 6.3, the adapter should preserve this mapping:
+
+```text title="Logos results and spans become the existing tokens"
+source: "//é\r\nname"
+
+Ok(LineComment), 0..5  -> LineComment [0, 5)
+Ok(Whitespace),  5..6  -> Whitespace  [5, 6)
+Ok(Identifier),  6..10 -> Identifier  [6, 10)
+```
+
+The existing exact-range test checks that mapping, including LF staying
+outside the comment. The adjacent-unknown-character test checks that error
+spans still select complete individual characters. The partition test checks
+that successful and error tokens together retain all the source.
+
+Replacing `scan` removes its handwritten matching and cursor loops. The
+complete earlier implementation remains in Section 6.3 for reference; we
+won’t carry an unused second scanner into the next lessons.
+
+## Run the same expectations again
+
+With the dependency, enum attributes, and adapter in place, run:
+
+```sh
+cargo test -p rlox-syntax
+```
+
+Cargo should resolve Logos and its dependencies, update **`rlox/Cargo.lock`**,
+and compile the derive. The named tests should report `ok` with the same
+expected kinds and ranges that passed before the replacement. Keep Cargo’s
+lockfile changes; don’t write registry entries by hand.
+
+Then check the whole workspace:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+These checks should finish successfully. `print` is still an identifier,
+digits are still unsupported at the start of a token, and the set of
+recognized punctuation is unchanged. We’ll extend the lexical rules in the
+following sections. The CLI continues to provide its existing `source`
+command.
+
+<details>
+<summary>Complete resulting syntax library</summary>
+
+```rust title="rlox/crates/syntax/src/lib.rs · complete resulting file"
+use logos::Logos;
+
+use rlox_text::{TextRange, TextSize};
+
+#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxKind {
+    #[token("(")]
+    LeftParen,
+    #[token(")")]
+    RightParen,
+    #[token("/")]
+    Slash,
+    #[token("!")]
+    Bang,
+    #[token("!=")]
+    BangEqual,
+    #[token("=")]
+    Equal,
+    #[token("==")]
+    EqualEqual,
+    #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
+    Identifier,
+    #[regex(r"[ \t\r\n]+")]
+    Whitespace,
+    #[regex(r"//[^\n]*", allow_greedy = true)]
+    LineComment,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+
+pub fn scan(source: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+
+    for (result, span) in SyntaxKind::lexer(source).spanned() {
+        let kind = match result {
+            Ok(kind) => kind,
+            Err(()) => SyntaxKind::Error,
+        };
+        let range = TextRange::new(TextSize(span.start), TextSize(span.end))
+            .expect("Logos spans are ordered");
+
+        tokens.push(Token { kind, range });
+    }
+
+    tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextRange, TextSize};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()=!");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source);
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(tokens[0].range.slice(source), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(tokens[1].range.slice(source), Some("!"));
+    }
+
+    #[test]
+    fn scans_adjacent_paired_operators() {
+        assert_eq!(
+            scan("!==="),
+            vec![
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::EqualEqual,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_lookahead_preserves_the_next_character() {
+        assert_eq!(
+            scan("!é("),
+            vec![
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn single_operator_can_end_the_source() {
+        for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifiers_stop_before_operators() {
+        assert_eq!(
+            scan("a_2!=other"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(5), TextSize(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn identifiers_can_end_the_source() {
+        for source in ["_", "A9", "print"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifier_rules_preserve_unsupported_characters() {
+        assert_eq!(
+            scan("2aé_b"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(4), TextSize(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_whitespace_between_tokens() {
+        assert_eq!(
+            scan("a \t\r\n!= b"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(5), TextSize(7)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(7), TextSize(8)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(8), TextSize(9)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn whitespace_uses_the_lox_character_set() {
+        for source in ["\u{000b}", "\u{000c}", "\u{00a0}"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_ranges_cover_the_original_source() {
+        for source in [
+            "",
+            " \t\r\n",
+            "a \t\r\n!= b",
+            "a_2!=other",
+            "2aé_b",
+            "a\u{00a0}b",
+            "/",
+            "/name",
+            "//",
+            "//\n",
+            "//é\r\nname",
+            "///",
+            "a//x\nb",
+        ] {
+            let mut offset = 0;
+            let mut reconstructed = String::new();
+
+            for token in scan(source) {
+                let text = token.range.slice(source).expect("valid UTF-8 source slice");
+                assert!(!text.is_empty());
+                let end = offset + text.len();
+                let expected = TextRange::new(TextSize(offset), TextSize(end)).unwrap();
+                assert_eq!(token.range, expected);
+
+                reconstructed.push_str(text);
+                offset = end;
+            }
+
+            assert_eq!(offset, source.len());
+            assert_eq!(reconstructed, source);
+        }
+    }
+
+    #[test]
+    fn recognizes_single_slashes() {
+        assert_eq!(
+            scan("/"),
+            vec![Token {
+                kind: SyntaxKind::Slash,
+                range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+            }]
+        );
+        assert_eq!(
+            scan("/name"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Slash,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_leave_the_line_feed_unread() {
+        assert_eq!(
+            scan("//é\r\nname"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LineComment,
+                    range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(6), TextSize(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_can_end_at_eof() {
+        for source in ["//", "//é", "///"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::LineComment,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_characters_remain_separate_tokens() {
+        assert_eq!(
+            scan("@é💥"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
+                },
+            ]
+        );
+    }
+}
+```
+
+</details>
+
+Our scanner now describes the supported spellings beside their kinds and
+converts generated lexer output into the same project tokens. The regression
+cases stay in place as we add the remaining punctuation, then keywords,
+numbers, and strings.

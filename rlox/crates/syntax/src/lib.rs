@@ -1,16 +1,28 @@
+use logos::Logos;
+
 use rlox_text::{TextRange, TextSize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyntaxKind {
+    #[token("(")]
     LeftParen,
+    #[token(")")]
     RightParen,
+    #[token("/")]
     Slash,
+    #[token("!")]
     Bang,
+    #[token("!=")]
     BangEqual,
+    #[token("=")]
     Equal,
+    #[token("==")]
     EqualEqual,
+    #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     Identifier,
+    #[regex(r"[ \t\r\n]+")]
     Whitespace,
+    #[regex(r"//[^\n]*", allow_greedy = true)]
     LineComment,
     Error,
 }
@@ -23,60 +35,14 @@ pub struct Token {
 
 pub fn scan(source: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
-    let mut chars = source.char_indices().peekable();
 
-    while let Some((start, ch)) = chars.next() {
-        let mut end = start + ch.len_utf8();
-        let kind = match ch {
-            '(' => SyntaxKind::LeftParen,
-            ')' => SyntaxKind::RightParen,
-            '!' => {
-                if chars.next_if(|&(_, next)| next == '=').is_some() {
-                    end += 1;
-                    SyntaxKind::BangEqual
-                } else {
-                    SyntaxKind::Bang
-                }
-            }
-            '=' => {
-                if chars.next_if(|&(_, next)| next == '=').is_some() {
-                    end += 1;
-                    SyntaxKind::EqualEqual
-                } else {
-                    SyntaxKind::Equal
-                }
-            }
-            '/' => {
-                if chars.next_if(|&(_, next)| next == '/').is_some() {
-                    end += 1;
-                    while let Some((offset, next)) = chars.next_if(|&(_, next)| next != '\n') {
-                        end = offset + next.len_utf8();
-                    }
-                    SyntaxKind::LineComment
-                } else {
-                    SyntaxKind::Slash
-                }
-            }
-            ' ' | '\t' | '\r' | '\n' => {
-                while let Some((offset, next)) =
-                    chars.next_if(|&(_, next)| matches!(next, ' ' | '\t' | '\r' | '\n'))
-                {
-                    end = offset + next.len_utf8();
-                }
-                SyntaxKind::Whitespace
-            }
-            ch if ch.is_ascii_alphabetic() || ch == '_' => {
-                while let Some((offset, next)) =
-                    chars.next_if(|&(_, next)| next.is_ascii_alphanumeric() || next == '_')
-                {
-                    end = offset + next.len_utf8();
-                }
-                SyntaxKind::Identifier
-            }
-            _ => SyntaxKind::Error,
+    for (result, span) in SyntaxKind::lexer(source).spanned() {
+        let kind = match result {
+            Ok(kind) => kind,
+            Err(()) => SyntaxKind::Error,
         };
-        let range = TextRange::new(TextSize(start), TextSize(end))
-            .expect("character end follows its start");
+        let range = TextRange::new(TextSize(span.start), TextSize(span.end))
+            .expect("Logos spans are ordered");
 
         tokens.push(Token { kind, range });
     }
@@ -377,5 +343,26 @@ mod tests {
                 }]
             );
         }
+    }
+
+    #[test]
+    fn unknown_characters_remain_separate_tokens() {
+        assert_eq!(
+            scan("@é💥"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
+                },
+            ]
+        );
     }
 }

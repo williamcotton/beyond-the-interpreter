@@ -108,3 +108,10 @@ Section 6.3 is drafted at `src/content/docs/chapter-6/6.3-line-comments.mdx`,
 served at `/chapter-6/6.3-line-comments/`. Static byte steps explain retained
 comments and unread terminating LF. The section and matching Rust are accepted,
 completing Chapter 6; local workspace checks and native example consistency pass.
+
+Section 7.1 is drafted at `src/content/docs/chapter-7/7.1-logos.mdx`, served at
+`/chapter-7/7.1-logos/`. It preserves the current lexical contract while
+replacing scanner mechanics with Logos, with a baseline regression run before
+the migration. Text is approved; matching Logos implementation, baseline
+comparison and local checks pass. The section and matching scanner, including
+the corrected greedy-comment option, are accepted.
