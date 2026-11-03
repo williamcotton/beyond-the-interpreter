@@ -2,7 +2,7 @@
 
 ## CH04-04 — Run the checks automatically (implementation and hosted verification)
 
-**Status:** Ready for combined review. Implementation committed and pushed; hosted CI passed.
+**Status:** Accepted when the user requested committing and moving on to Chapter 5 planning. Implementation committed and pushed; hosted CI passed.
 
 **Authorization:** the user accepted 4.3 and requested committing it before 4.4. Accepted endpoint committed as `13c8e8e` (`feat: pair section 4.3 with app and text workspace`). During drafting, the user identified the reader/repository-root mismatch and approved separating the reader’s Rust repository from this book’s monorepo. The user confirmed our workflow belongs at this repository root, approved the text, and explicitly requested updating the codebase, pushing to origin, and observing CI from the CLI.
 
@@ -36,4 +36,4 @@ That is the sole authoring-layout adaptation to the reader workflow. Document an
 
 **Hosted evidence:** pushed `96d1d19` (`feat: pair section 4.4 with github actions workspace checks`) to origin/main. [Rust CI run 41619820330](https://github.com/williamcotton/beyond-the-interpreter/actions/runs/41619820330) completed successfully for that exact revision. Checkout, Rust setup, formatting, Clippy, and all eleven tests passed on Ubuntu 24.04.5 with rustc/Cargo 1.99.1. Verified run SHA, job/step conclusions, and logs using gh. No implementation or manuscript correction was needed.
 
-**Stopping point:** section and root workflow are Ready for combined review; await explicit user acceptance. No unfinished implementation work or observed CI failures remain. Do not begin Chapter 5.
+**Stopping point:** combined endpoint accepted; no unfinished work remains. The next authorized task is Chapter 5 planning only.

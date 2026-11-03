@@ -46,7 +46,7 @@ workspace packages with unchanged source and CLI behavior. Section 4.4 is
 authored at `src/content/docs/chapter-4/4.4-ci.mdx`, served at
 `/chapter-4/4.4-ci/`. Its reader workflow assumes the Rust repository root;
 our implemented root workflow runs Cargo from rlox/. Local checks and hosted
-Rust CI pass; the combined endpoint is ready for review.
+Rust CI pass; the combined endpoint is accepted.
 
 Astro and Starlight provide the publication; Starlight includes MDX support.
 The React integration and strict TypeScript configuration support future
