@@ -29,7 +29,10 @@ and accepted. Production behavior remains as in 2.3. Section 3.1 is
 at `src/content/docs/chapter-3/3.1-source-command.mdx`, served at
 `/chapter-3/3.1-source-command/`. Its text is approved and matching Rust/ordered
 route are verified and accepted. Current invocation:
-`cargo run -- source hello.lox` from rlox/.
+`cargo run -- source hello.lox` from rlox/. Section 3.2 is a text draft at
+`src/content/docs/chapter-3/3.2-clap.mdx`, served at `/chapter-3/3.2-clap/`.
+Its text is approved, and its Clap dependency, manifest/lockfile, Rust, and
+migrated tests match the verified instructions and are accepted.
 
 Astro and Starlight provide the publication; Starlight includes MDX support.
 The React integration and strict TypeScript configuration support future

@@ -13,8 +13,8 @@ Section 1.1 demonstrates a code introduction, a meaningful one-line edit, comple
 
 ## Actual repository and capabilities
 
-- `site/`: Astro/Starlight publication with MDX, React integration, and strict TypeScript. The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; the proposed Section 1.2 was removed after scope review. Section 2.1 and its matching Rust endpoint are accepted; Section 2.2 and its matching Rust/sample are accepted; Section 2.3 and its matching Rust are accepted. Section 2.4 and its matching Rust/tests are accepted. The Chapter 3 section frame is accepted; Section 3.1 and matching Rust are accepted. Navigation includes only authored pages. Starlight supplies listings and a focused diff; no custom diff viewer or trace framework exists.
-- `rlox/`: one binary package named `rlox`, Rust edition 2024, no external dependencies. Its `source FILE` command reads exactly one filename as UTF-8 and prints its contents without adding a newline. Missing or extra arguments print usage to stderr and fail; failed reads print a contextual stderr diagnostic and fail. Successful reads return success. Files are Cargo.toml, Cargo.lock, src/main.rs, .gitignore, and hello.lox. It does not scan tokens or execute Lox. Seven unit tests check filename policy and command selection; they do not cover file reads, stderr, or exit status.
+- `site/`: Astro/Starlight publication with MDX, React integration, and strict TypeScript. The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; the proposed Section 1.2 was removed after scope review. Section 2.1 and its matching Rust endpoint are accepted; Section 2.2 and its matching Rust/sample are accepted; Section 2.3 and its matching Rust are accepted. Section 2.4 and its matching Rust/tests are accepted. The Chapter 3 section frame is accepted; Section 3.1 and matching Rust are accepted; Section 3.2 and its matching Clap implementation/tests are accepted. Navigation includes only authored pages. Starlight supplies listings and a focused diff; no custom diff viewer or trace framework exists.
+- `rlox/`: one binary package named `rlox`, Rust edition 2024, with Clap 4.6.7 and its derive feature. Cargo.lock records the resolved dependencies. Its `source FILE` command reads exactly one filename as UTF-8 and prints its contents without adding a newline. Clap generates help and validates commands/arguments; requested help succeeds on stdout, while usage errors fail with status 2 on stderr; failed reads print a contextual stderr diagnostic and fail. Successful reads return success. Files are Cargo.toml, Cargo.lock, src/main.rs, .gitignore, and hello.lox. It does not scan tokens or execute Lox. Five unit tests check the declared CLI, rejection cases, and help status; they do not cover file reads, stderr, or exit status.
 - `authoring/`: current roadmap, architecture, review guidance, status, and brief. No fixtures/replay framework or future crate scaffold exists.
 - Hosted CI, deployment, release artifacts, distribution, and cross-platform coverage: not established.
 
@@ -178,8 +178,26 @@ The user rejected the proposed greeting-process-test section as offering too lit
 
 **Review focus:** matching text/code, the explicit invocation change, and separation of command selection from filename validation. No unfinished implementation work remains within 3.1; the user accepted the combined endpoint.
 
+## CH03-02 — Describe the command with Clap
+
+**Authorization:** the user accepted 3.1 and requested a commit followed by 3.2. Committed the accepted section/code and supporting records as `9d71905` (`feat: pair section 3.1 with source command dispatch`) before drafting. No push or publication.
+
+**Status:** Accepted when the user said “great, commit and move on to outlining the sections for chapter 4.” Matching dependency/code/test migration and ordered route are verified.
+
+**Scope:** declare Cli and Command::Source with Clap derive, retain owned String filename/read/output behavior, replace manual helpers and migrate helper tests to the declared CLI. Include global/command help, typed successful parse, invalid-command cases, usage status 2 versus prior 1, and existing read failure status. No PathBuf, new operation, module/crate split, or fixture.
+
+**Dependency evidence:** current official Clap docs and normalized published Cargo.toml identify 4.6.7, derive support, and Rust 1.85 minimum. This fits the current local toolchain/edition at the metadata level. Crates.io API returned 403; the official docs.rs published manifest supplied the needed metadata. No Cargo command or temporary compilation occurred during text review. The authorized implementation pass subsequently resolved and compiled the declared dependency; evidence follows below.
+
+**Visual approach:** established listings/diffs/terminal excerpts suffice; no routine browser/screenshots.
+
+**Checks observed for 3.2:** manifest/main diffs, CLI declarations, helper removals, and test replacement reconstruct the complete listings from actual 3.1 via string checks only. Site check reported zero diagnostics and build succeeded with existing optional-content/sitemap notices. Eight local pages return HTTP 200, local links/anchors resolve, and all six manuscript reference URLs/fragments resolve. All five rlox files match HEAD; no dependency or proposed Rust command executed. git diff --check passed. No browser/screenshots.
+
+**Implementation evidence:** followed the displayed sequence from actual 3.1: old --help failed; applied manifest/import/declaration/main edits; removed superseded helpers/tests; cargo check resolved 21 registry packages and generated Cargo.lock; both help views, source success, all five usage failures, read failure and recovery matched; installed the replacement test module, ran cargo test, and finished with source success. Five tests pass. Formatting and Clippy with warnings denied pass. Main and Cargo.toml exactly match complete listings. Lockfile confirms Clap/builder/derive 4.6.7 and checksums for registry packages. hello.lox and ignore file are unchanged. Direct executable checks confirmed help stdout/empty stderr/status 0, usage empty stdout/stderr/status 2, read empty stdout/contextual stderr/status 1, and byte-exact source stdout/empty stderr/status 0. Library help command and -- separator with a dash-prefixed temporary filename also passed. No manuscript correction was needed. No repeated site/browser checks. Rust/Cargo 1.95.0 Homebrew on macOS; minimum-version, permission-denied paths, and other platforms remain unverified.
+
+**Review focus:** matching section and typed CLI, generated help versus usage/read failures, and retirement of manual parsing/tests. No unfinished implementation work remains within 3.2; the combined endpoint is accepted.
+
 ## Handoff
 
-Accepted starting point: Chapter 2 Rust/tests in `04d4575`; Chapter 3’s two-part working frame is accepted. Current authorized action: commit accepted 3.1 and matching Rust, then draft 3.2 for text review. No push or publication is authorized.
+Accepted starting point: Section 3.2 Rust/manifest/lockfile/tests. Current authorized action: commit the accepted endpoint, then outline Chapter 4 section boundaries for review. No Chapter 4 manuscript or implementation is authorized. No push or publication.
 
 **Status meanings:** Proposed = described but not authorized; In progress = authorized work underway; Ready for review = delivered evidence awaiting user judgment, with phase stated; Revision requested = current work remains active; Accepted = explicit user approval with conversation evidence recorded.

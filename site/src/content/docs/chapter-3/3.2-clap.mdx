@@ -1,0 +1,460 @@
+---
+title: 3.2 — Describe the command with Clap
+slug: chapter-3/3.2-clap
+description: Declare the source command once, then use Clap for parsing, validation, and generated help.
+prev:
+  link: /chapter-3/3.1-source-command/
+  label: 3.1 · Give the operation a name
+next: false
+---
+
+<p className="book-subtitle">Chapter 3 · Commands and Clap</p>
+
+Our manual dispatcher knows the command’s name and filename rule, but someone
+using the executable can only discover them by making a mistake. Try asking
+for help from the [completed Section 3.1](/chapter-3/3.1-source-command/).
+Keep your terminal in **`rlox/`**:
+
+```sh
+cargo run --quiet -- --help
+```
+
+It should fail with `Usage: rlox source <file>` on stderr. To support help
+ourselves, we would need more parsing branches and another description of
+what the command accepts. We’ll use **Clap**, a command-line parsing library,
+to build parsing, validation, and help from a single declaration.
+
+The operation stays the same: `rlox source FILE` displays a file’s text. We’ll
+replace the command-line boundary around it.
+
+## Add the dependency
+
+Clap’s **derive API** lets us describe the CLI using Rust types and attributes.
+Its `derive` feature enables the macros that generate parsing code from those
+types. A dependency feature is an optional part of a library selected in
+Cargo’s manifest; it is separate from our program’s runtime arguments.
+
+Add the dependency in **`rlox/Cargo.toml`**:
+
+```diff title="rlox/Cargo.toml"
+ [dependencies]
++clap = { version = "=4.6.7", features = ["derive"] }
+```
+
+The `=` selects this exact Clap release for the lesson. Its [published manifest](https://docs.rs/crate/clap/latest/source/Cargo.toml)
+requires Rust 1.85, compatible with the toolchain used so far. Here is the
+complete manifest:
+
+```toml title="rlox/Cargo.toml · complete file"
+[package]
+name = "rlox"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "=4.6.7", features = ["derive"] }
+```
+
+Cargo will resolve Clap’s own dependencies and update `Cargo.lock` when we
+build. Keep that generated lockfile; it records the exact resolved versions.
+We don’t edit its package entries by hand.
+
+## Describe the command as data
+
+A **struct** groups named fields. Our `Cli` struct will hold the selected
+command in a field named `command`. An **enum** describes alternatives; each
+alternative is called a variant. We’ll define a `Command` enum with the one
+operation we currently support: `Source`, carrying its filename in `file`.
+That field is an owned `String`, like the argument strings we used before.
+
+The Rust Book introduces
+[structs](https://doc.rust-lang.org/book/ch05-01-defining-structs.html)
+and [enums with associated data](https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html).
+Here, those types give a successful parse a concrete result: a source command
+with the filename it needs.
+
+At the top of **`rlox/src/main.rs`**, add the Clap import beside the existing
+standard-library import:
+
+```diff title="rlox/src/main.rs · imports"
+ use std::process::ExitCode;
++
++use clap::{Parser, Subcommand};
+```
+
+Then insert these definitions **after the imports and before `main`**:
+
+```rust title="rlox/src/main.rs · CLI declarations"
+#[derive(Parser)]
+#[command(name = "rlox", about = "Inspect Lox source files")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Display a file's source text.
+    Source {
+        /// File whose text should be displayed.
+        file: String,
+    },
+}
+```
+
+`#[derive(Parser)]` and `#[derive(Subcommand)]` are **derive macros**. At
+compile time they generate implementations from the annotated types; we
+aren’t writing the argument-walking code ourselves. A **trait** describes operations a type provides; this generated implementation
+supplies parsing operations for `Cli`. The `Parser` import brings the trait
+providing methods such as `Cli::parse` into scope.
+
+`#[command(subcommand)]` tells Clap that this field selects an operation.
+Because it holds `Command`, rather than `Option<Command>`, an operation is
+required. The `Source` variant becomes the command-line name `source`, and
+its required `file: String` field becomes one positional argument, displayed
+as `<FILE>` in help. The `///` lines are documentation comments; Clap uses
+them as help text.
+
+We set the executable’s name and short description in the attribute above
+`Cli`. The library now has enough information to explain the invocation as
+well as parse it. Clap’s
+[derive tutorial](https://docs.rs/clap/latest/clap/_derive/_tutorial/index.html)
+shows how these declarations determine the interface.
+
+## Replace manual parsing
+
+`Cli::parse()` reads the process arguments. On a valid command it returns a
+`Cli` value. On invalid arguments it prints a diagnostic and exits; for help
+it prints the requested help and exits successfully. Those early exits
+happen before our file-reading code runs.
+
+We’ll access the selected operation through `.command`, then match
+`Command::Source { file }`. This pattern takes the variant’s `file` string
+and binds it as `file` in that arm. Returning it from the arm gives our
+existing `filename` binding the owned string.
+
+Replace the initial argument selection in **`main`**, including the borrow
+at the file-read call:
+
+```diff title="rlox/src/main.rs · parsing in main"
+ fn main() -> ExitCode {
+-    let args: Vec<String> = std::env::args().skip(1).collect();
+-    let filename = match source_filename_from_args(&args) {
+-        Some(filename) => filename,
+-        None => {
+-            eprintln!("Usage: rlox source <file>");
+-            return ExitCode::FAILURE;
+-        }
++    let filename = match Cli::parse().command {
++        Command::Source { file } => file,
+     };
+-    let source = match std::fs::read_to_string(filename) {
++    let source = match std::fs::read_to_string(&filename) {
+         Ok(source) => source,
+```
+
+`filename` now owns its `String`, so `&filename` lends it to the read operation
+while keeping it available for our error message. The remaining read-error
+branch, source output, and successful return stay unchanged.
+
+Clap replaces both manual parsing functions. Remove **`filename_from_args`**
+and **`source_filename_from_args`** from below `main`:
+
+```diff title="rlox/src/main.rs · remove superseded helpers"
+-fn filename_from_args(args: &[String]) -> Option<&str> {
+-    if args.len() != 1 {
+-        return None;
+-    }
+-
+-    Some(&args[0])
+-}
+-
+-fn source_filename_from_args(args: &[String]) -> Option<&str> {
+-    let (command, command_args) = args.split_first()?;
+-
+-    match command.as_str() {
+-        "source" => filename_from_args(command_args),
+-        _ => None,
+-    }
+-}
+```
+
+The old test module imports those functions, so it must change too. **Remove
+the existing `#[cfg(test)] mod tests { ... }` block at the end of `main.rs`,
+including all its tests and its closing brace.** We’ll replace those helper
+tests with tests of the declared interface below. This is an intermediate
+endpoint with no test module; finish the test migration before treating the
+section as complete.
+
+With the declarations, `main` edit, and removals all saved, run:
+
+```sh
+cargo check
+```
+
+This first build may download and compile dependencies, and should finish
+successfully. Check that Cargo updated `rlox/Cargo.lock`. Neither `hello.lox`
+nor our Lox source-output behavior needs an edit.
+
+## Ask the program for help
+
+Run:
+
+```sh
+cargo run --quiet -- --help
+```
+
+This should now succeed, writing help to stdout with empty stderr. Its
+opening should include:
+
+```text title="Help output · opening"
+Inspect Lox source files
+
+Usage: rlox <COMMAND>
+```
+
+Look for the `source` entry and its description in the command list. Clap
+also supplies a `help` command for asking about commands; it isn’t another
+Lox operation. Ask specifically about `source`:
+
+```sh
+cargo run --quiet -- source --help
+```
+
+This should also succeed without opening a file. Look for:
+
+```text title="Source help · usage line"
+Usage: rlox source <FILE>
+```
+
+The text next to `<FILE>` comes from the documentation comment on our field.
+These help views and argument validation use the same declaration.
+
+Now run the actual operation:
+
+```sh
+cargo run --quiet -- source hello.lox
+```
+
+It should still print `print "Hello, Lox!";` followed by the file’s newline,
+with no help text mixed into the source output.
+
+## Keep failures distinct
+
+Try the same invalid forms we rejected in 3.1, **one at a time**:
+
+```sh
+cargo run --quiet --
+cargo run --quiet -- hello.lox
+cargo run --quiet -- unknown hello.lox
+cargo run --quiet -- source
+cargo run --quiet -- source hello.lox other.lox
+```
+
+Each should leave stdout empty, report the problem on stderr, and exit with
+status **2**. Missing commands may produce the command help on stderr;
+unknown commands and invalid filename counts get a diagnostic with usage.
+The messages are now generated by Clap rather than our fixed usage line.
+
+This changes the argument-error status from the **1** used by our manual
+parser. Clap uses **0** for requested help and **2** for usage failures, as
+its [error documentation](https://docs.rs/clap/latest/clap/error/struct.Error.html#method.exit_code)
+explains. File-read failures remain our responsibility and retain the
+failure status returned from `main`—**1** on our local platform.
+
+Check that distinction with a path that does not exist. Assuming
+`missing.lox` is absent from `rlox/`, run:
+
+```sh
+cargo run --quiet -- source missing.lox
+```
+
+It should still leave stdout empty and write our diagnostic, beginning
+`rlox: could not read 'missing.lox':`, followed by the operating system’s
+reason. Recover with:
+
+```sh
+cargo run --quiet -- source hello.lox
+```
+
+The source output should be unchanged. For a filename beginning with `-`,
+Clap’s own `--` separator can stop option parsing; for example, the general
+form is `rlox source -- FILE`. That separator belongs to `rlox`, while the
+one immediately after `cargo run` separates Cargo’s arguments from ours.
+
+## Test the declared interface
+
+The old tests called helper functions that no longer exist. We still care
+about the command’s contract, so we’ll test the parser against supplied
+argument lists with `Cli::try_parse_from`.
+
+Unlike `parse`, this method **returns** a `Result` instead of printing and
+exiting. `Ok` holds a parsed `Cli`; `Err` holds a Clap error or a request for
+help. The supplied list includes an executable name as its first element,
+so each example starts with `"rlox"`. We can test these values without
+starting another process or opening a file.
+
+Append this replacement module **after `main` in `rlox/src/main.rs`**:
+
+```rust title="rlox/src/main.rs · replacement test module"
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn accepts_source_command() {
+        let cli = Cli::try_parse_from(["rlox", "source", "hello.lox"])
+            .expect("source with a filename should parse");
+
+        match cli.command {
+            Command::Source { file } => assert_eq!(file, "hello.lox"),
+        }
+    }
+
+    #[test]
+    fn requires_known_command() {
+        assert!(Cli::try_parse_from(["rlox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "hello.lox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "unknown", "hello.lox"]).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_filename() {
+        assert!(Cli::try_parse_from(["rlox", "source"]).is_err());
+    }
+
+    #[test]
+    fn rejects_extra_filenames() {
+        assert!(Cli::try_parse_from(["rlox", "source", "hello.lox", "other.lox"]).is_err());
+    }
+
+    #[test]
+    fn help_is_a_successful_request() {
+        let help = Cli::try_parse_from(["rlox", "--help"])
+            .err()
+            .expect("help should stop parsing");
+
+        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+        assert_eq!(help.exit_code(), 0);
+    }
+}
+```
+
+The first test checks the value we want to work with after parsing. The
+rejection tests use `is_err()` to obtain a boolean, then `assert!` to require
+that it is true. We’re checking our declared command shape, rather than
+pinning Clap’s exact diagnostic formatting.
+
+The help test covers a different outcome. A help request stops parsing
+without returning a `Cli`, so it uses `Err` too. The `err()` method converts
+that error side into an `Option`; `expect` requires it to be present. We then
+check its category and successful status. `ErrorKind::DisplayHelp` is a
+library enum variant identifying requested help.
+
+Run:
+
+```sh
+cargo test
+```
+
+All named tests should report `ok`. These assertions check parsing and
+returned values; the earlier terminal commands check actual output streams
+and process exits. The
+[`Parser` reference](https://docs.rs/clap/latest/clap/trait.Parser.html#method.try_parse_from)
+explains the two parsing entry points.
+
+<details>
+<summary>Complete rlox/src/main.rs</summary>
+
+```rust title="rlox/src/main.rs · complete file"
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "rlox", about = "Inspect Lox source files")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Display a file's source text.
+    Source {
+        /// File whose text should be displayed.
+        file: String,
+    },
+}
+
+fn main() -> ExitCode {
+    let filename = match Cli::parse().command {
+        Command::Source { file } => file,
+    };
+    let source = match std::fs::read_to_string(&filename) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("rlox: could not read '{filename}': {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    print!("{source}");
+    ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn accepts_source_command() {
+        let cli = Cli::try_parse_from(["rlox", "source", "hello.lox"])
+            .expect("source with a filename should parse");
+
+        match cli.command {
+            Command::Source { file } => assert_eq!(file, "hello.lox"),
+        }
+    }
+
+    #[test]
+    fn requires_known_command() {
+        assert!(Cli::try_parse_from(["rlox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "hello.lox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "unknown", "hello.lox"]).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_filename() {
+        assert!(Cli::try_parse_from(["rlox", "source"]).is_err());
+    }
+
+    #[test]
+    fn rejects_extra_filenames() {
+        assert!(Cli::try_parse_from(["rlox", "source", "hello.lox", "other.lox"]).is_err());
+    }
+
+    #[test]
+    fn help_is_a_successful_request() {
+        let help = Cli::try_parse_from(["rlox", "--help"])
+            .err()
+            .expect("help should stop parsing");
+
+        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+        assert_eq!(help.exit_code(), 0);
+    }
+}
+```
+
+</details>
+
+Finish with a successful run:
+
+```sh
+cargo run --quiet -- source hello.lox
+```
+
+We still display the same source, but command parsing now produces a typed
+value, and the declaration also supplies validation and help. The manual
+parser has been retired; our file-reading behavior remains in `main`.

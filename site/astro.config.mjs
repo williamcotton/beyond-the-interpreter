@@ -28,6 +28,7 @@ export default defineConfig({
           label: '3 · Commands and Clap',
           items: [
             { label: '3.1 · Give the operation a name', link: '/chapter-3/3.1-source-command/' },
+            { label: '3.2 · Describe the command with Clap', link: '/chapter-3/3.2-clap/' },
           ],
         },
       ],

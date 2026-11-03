@@ -1,15 +1,28 @@
 use std::process::ExitCode;
 
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "rlox", about = "Inspect Lox source files")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Display a file's source text.
+    Source {
+        /// File whose text should be displayed.
+        file: String,
+    },
+}
+
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let filename = match source_filename_from_args(&args) {
-        Some(filename) => filename,
-        None => {
-            eprintln!("Usage: rlox source <file>");
-            return ExitCode::FAILURE;
-        }
+    let filename = match Cli::parse().command {
+        Command::Source { file } => file,
     };
-    let source = match std::fs::read_to_string(filename) {
+    let source = match std::fs::read_to_string(&filename) {
         Ok(source) => source,
         Err(error) => {
             eprintln!("rlox: could not read '{filename}': {error}");
@@ -20,77 +33,45 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn filename_from_args(args: &[String]) -> Option<&str> {
-    if args.len() != 1 {
-        return None;
-    }
-
-    Some(&args[0])
-}
-
-fn source_filename_from_args(args: &[String]) -> Option<&str> {
-    let (command, command_args) = args.split_first()?;
-
-    match command.as_str() {
-        "source" => filename_from_args(command_args),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{filename_from_args, source_filename_from_args};
+    use super::{Cli, Command};
+    use clap::Parser;
 
     #[test]
-    fn accepts_one_filename() {
-        let args = vec![String::from("hello.lox")];
+    fn accepts_source_command() {
+        let cli = Cli::try_parse_from(["rlox", "source", "hello.lox"])
+            .expect("source with a filename should parse");
 
-        assert_eq!(filename_from_args(&args), Some("hello.lox"));
+        match cli.command {
+            Command::Source { file } => assert_eq!(file, "hello.lox"),
+        }
+    }
+
+    #[test]
+    fn requires_known_command() {
+        assert!(Cli::try_parse_from(["rlox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "hello.lox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "unknown", "hello.lox"]).is_err());
     }
 
     #[test]
     fn rejects_missing_filename() {
-        assert_eq!(filename_from_args(&[]), None);
+        assert!(Cli::try_parse_from(["rlox", "source"]).is_err());
     }
 
     #[test]
     fn rejects_extra_filenames() {
-        let args = vec![String::from("hello.lox"), String::from("other.lox")];
-
-        assert_eq!(filename_from_args(&args), None);
+        assert!(Cli::try_parse_from(["rlox", "source", "hello.lox", "other.lox"]).is_err());
     }
 
     #[test]
-    fn accepts_source_command() {
-        let args = vec![String::from("source"), String::from("hello.lox")];
+    fn help_is_a_successful_request() {
+        let help = Cli::try_parse_from(["rlox", "--help"])
+            .err()
+            .expect("help should stop parsing");
 
-        assert_eq!(source_filename_from_args(&args), Some("hello.lox"));
-    }
-
-    #[test]
-    fn requires_command() {
-        assert_eq!(source_filename_from_args(&[]), None);
-    }
-
-    #[test]
-    fn rejects_other_command_names() {
-        let args = vec![String::from("unknown"), String::from("hello.lox")];
-        assert_eq!(source_filename_from_args(&args), None);
-
-        let args = vec![String::from("hello.lox")];
-        assert_eq!(source_filename_from_args(&args), None);
-    }
-
-    #[test]
-    fn source_requires_one_filename() {
-        let args = vec![String::from("source")];
-        assert_eq!(source_filename_from_args(&args), None);
-
-        let args = vec![
-            String::from("source"),
-            String::from("hello.lox"),
-            String::from("other.lox"),
-        ];
-        assert_eq!(source_filename_from_args(&args), None);
+        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+        assert_eq!(help.exit_code(), 0);
     }
 }
