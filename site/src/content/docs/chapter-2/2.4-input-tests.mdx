@@ -1,0 +1,268 @@
+---
+title: 2.4 — Check the input rules
+slug: chapter-2/2.4-input-tests
+description: Test the filename policy directly and use a deliberate regression to see what the tests protect.
+prev:
+  link: /chapter-2/2.3-input-errors/
+  label: 2.3 · Explain input failures
+next: false
+---
+
+<p className="book-subtitle">Chapter 2 · Reading Source</p>
+
+We checked our filename rule by running `rlox` with different arguments. If
+we change that rule later, we want a quick way to check it again. The
+`filename_from_args` function gives us a useful boundary: pass it some
+arguments, then compare its answer with the rule we intended.
+
+Begin with [Section 2.3](/chapter-2/2.3-input-errors/). Keep your terminal in
+**`rlox/`**. Run:
+
+```sh
+cargo test
+```
+
+Cargo can already build a test executable, but we haven’t given it any
+assertions about filename selection. Let’s add them beside the function.
+
+## A filename should come back unchanged
+
+Our first case is a command with one filename. We expect `Some` containing
+that filename. We can call the helper directly; the filename doesn’t have to
+refer to a real file because the helper only inspects arguments.
+
+Append this module **at the end of `rlox/src/main.rs`, after
+`filename_from_args`**:
+
+```rust title="rlox/src/main.rs · append after filename_from_args"
+#[cfg(test)]
+mod tests {
+    use super::filename_from_args;
+
+    #[test]
+    fn accepts_one_filename() {
+        let args = vec![String::from("hello.lox")];
+
+        assert_eq!(filename_from_args(&args), Some("hello.lox"));
+    }
+}
+```
+
+`mod tests` groups these functions in a module. The `#[cfg(test)]` attribute
+includes that module when compiling in test mode, so it doesn’t become part
+of our normal executable. Inside it, `super` names the parent module;
+`use super::filename_from_args;` brings our existing helper into scope.
+A child module can access this private function—we don’t need to make it
+public to test it.
+
+`#[test]` marks a function for Rust’s test runner. In its body, `vec!` creates
+a vector from the listed values, and `String::from("hello.lox")` creates the
+owned string our argument collection needs. We borrow that vector just as
+`main` does.
+
+`assert_eq!` compares its two expressions. On the left is the function’s
+actual result; on the right is the result we expect. The text inside
+`Some("hello.lox")` is a string literal, which provides the `&str` view used
+by our return type. If the values differ, the assertion panics and the test
+runner reports a failure, including both values.
+
+Run:
+
+```sh
+cargo test
+```
+
+Look for this successful test in the output:
+
+```text title="Test output · excerpt"
+test tests::accepts_one_filename ... ok
+```
+
+The Rust Book’s [“How to Write Tests”](https://doc.rust-lang.org/book/ch11-01-writing-tests.html)
+and [unit-test organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html#unit-tests)
+explain these conventions. The important connection here is between a concrete
+input and the answer the filename rule should give.
+
+## Invalid argument counts should be rejected
+
+A successful input doesn’t exercise the cases that produce our usage message.
+We need to check both ends of the rule: no filename, and more than one.
+Each should return `None`.
+
+Add these two functions **inside `mod tests`, after `accepts_one_filename` and
+before the module’s closing brace**:
+
+```rust title="rlox/src/main.rs · add inside mod tests"
+#[test]
+fn rejects_missing_filename() {
+    assert_eq!(filename_from_args(&[]), None);
+}
+
+#[test]
+fn rejects_extra_filenames() {
+    let args = vec![String::from("hello.lox"), String::from("other.lox")];
+
+    assert_eq!(filename_from_args(&args), None);
+}
+```
+
+`&[]` passes an empty sequence to the helper. Its parameter type tells Rust
+that the elements would be `String` values. In the other test, the vector
+contains two filenames. We expect rejection even though the first filename
+would have been valid on its own.
+
+Run the tests again:
+
+```sh
+cargo test
+```
+
+Each named test should report `ok`. Their execution order is unimportant;
+each constructs its own input and checks its own result.
+
+## Make a mistake on purpose
+
+Let’s check that the extra-argument test can detect the behavior we removed
+in Section 2.3. This is a **deliberate regression**, not a new filename rule.
+
+In **`filename_from_args`**, temporarily change the guard:
+
+```diff title="rlox/src/main.rs · deliberate regression"
+ fn filename_from_args(args: &[String]) -> Option<&str> {
+-    if args.len() != 1 {
++    if args.is_empty() {
+         return None;
+     }
+```
+
+`is_empty()` only checks whether the sequence has no elements. Predict what
+happens with two filenames: the function passes the guard and returns the
+first one, ignoring the extra argument. The one-filename and missing-filename
+cases still behave as before.
+
+Run this **intentional test failure**:
+
+```sh
+cargo test
+```
+
+The test command should exit unsuccessfully and identify
+`tests::rejects_extra_filenames` as failing. Its assertion should show:
+
+```text title="Failure diagnostic · excerpt"
+  left: Some("hello.lox")
+ right: None
+```
+
+The helper returned a filename where the test required rejection. We haven’t
+changed the test to accommodate the bug; the expected value still describes
+the rule we want.
+
+Restore the guard **before continuing**:
+
+```diff title="rlox/src/main.rs · restore the rule"
+ fn filename_from_args(args: &[String]) -> Option<&str> {
+-    if args.is_empty() {
++    if args.len() != 1 {
+         return None;
+     }
+```
+
+Then run:
+
+```sh
+cargo test
+```
+
+The tests should pass again. We have observed a specific behavior change
+making its test fail, and the correction making it pass.
+
+<details>
+<summary>Complete rlox/src/main.rs after restoring the rule</summary>
+
+```rust title="rlox/src/main.rs · complete file"
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let filename = match filename_from_args(&args) {
+        Some(filename) => filename,
+        None => {
+            eprintln!("Usage: rlox <file>");
+            return ExitCode::FAILURE;
+        }
+    };
+    let source = match std::fs::read_to_string(filename) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("rlox: could not read '{filename}': {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    print!("{source}");
+    ExitCode::SUCCESS
+}
+
+fn filename_from_args(args: &[String]) -> Option<&str> {
+    if args.len() != 1 {
+        return None;
+    }
+
+    Some(&args[0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filename_from_args;
+
+    #[test]
+    fn accepts_one_filename() {
+        let args = vec![String::from("hello.lox")];
+
+        assert_eq!(filename_from_args(&args), Some("hello.lox"));
+    }
+
+    #[test]
+    fn rejects_missing_filename() {
+        assert_eq!(filename_from_args(&[]), None);
+    }
+
+    #[test]
+    fn rejects_extra_filenames() {
+        let args = vec![String::from("hello.lox"), String::from("other.lox")];
+
+        assert_eq!(filename_from_args(&args), None);
+    }
+}
+```
+
+</details>
+
+## Keep the checks at the right boundary
+
+These are **unit tests of argument policy**. They do not launch `rlox`, open
+`hello.lox`, or check stderr and exit status. Those behaviors still need the
+terminal checks from Section 2.3. Run a successful command once more:
+
+```sh
+cargo run --quiet -- hello.lox
+```
+
+It should print the Lox source, `print "Hello, Lox!";`, followed by the file’s
+newline. Check an invalid command too:
+
+```sh
+cargo run --quiet -- hello.lox other.lox
+```
+
+It should print `Usage: rlox <file>` to stderr and exit unsuccessfully, with
+no source output. Recover with:
+
+```sh
+cargo run --quiet -- hello.lox
+```
+
+The argument tests give us repeatable checks of a rule with useful failure
+cases. They protect that rule while leaving file reading and terminal
+presentation in `main`. We can now read source, explain input failures, and
+check the filename policy automatically.

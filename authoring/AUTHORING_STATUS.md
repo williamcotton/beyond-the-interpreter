@@ -13,8 +13,8 @@ Section 1.1 demonstrates a code introduction, a meaningful one-line edit, comple
 
 ## Actual repository and capabilities
 
-- `site/`: Astro/Starlight publication with MDX, React integration, and strict TypeScript. The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; the proposed Section 1.2 was removed after scope review. Section 2.1 and its matching Rust endpoint are accepted; Section 2.2 and its matching Rust/sample are accepted; Section 2.3 and its matching Rust are accepted. Navigation includes only authored pages. Starlight supplies listings and a focused diff; no custom diff viewer or trace framework exists.
-- `rlox/`: one binary package named `rlox`, Rust edition 2024, no external dependencies. It reads the first supplied filename as UTF-8 and prints its contents without adding a newline. Missing or extra arguments print usage to stderr and fail; failed reads print a contextual stderr diagnostic and fail. Successful reads return success. Files are Cargo.toml, Cargo.lock, src/main.rs, .gitignore, and hello.lox. It does not scan tokens or execute Lox. There are zero Rust test cases.
+- `site/`: Astro/Starlight publication with MDX, React integration, and strict TypeScript. The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; the proposed Section 1.2 was removed after scope review. Section 2.1 and its matching Rust endpoint are accepted; Section 2.2 and its matching Rust/sample are accepted; Section 2.3 and its matching Rust are accepted. Section 2.4 and its matching Rust/tests are accepted. Navigation includes only authored pages. Starlight supplies listings and a focused diff; no custom diff viewer or trace framework exists.
+- `rlox/`: one binary package named `rlox`, Rust edition 2024, no external dependencies. It reads the first supplied filename as UTF-8 and prints its contents without adding a newline. Missing or extra arguments print usage to stderr and fail; failed reads print a contextual stderr diagnostic and fail. Successful reads return success. Files are Cargo.toml, Cargo.lock, src/main.rs, .gitignore, and hello.lox. It does not scan tokens or execute Lox. Three unit tests check the filename policy; they do not cover file reads, stderr, or exit status.
 - `authoring/`: current roadmap, architecture, review guidance, status, and brief. No fixtures/replay framework or future crate scaffold exists.
 - Hosted CI, deployment, release artifacts, distribution, and cross-platform coverage: not established.
 
@@ -136,8 +136,24 @@ The user rejected the proposed greeting-process-test section as offering too lit
 
 **Review focus:** matching text and Rust, especially the helper’s argument rule and useful terminal failure behavior. No unfinished implementation work remains in 2.3; the combined endpoint is accepted.
 
+## CH02-04 — Check the input rules
+
+**Authorization:** the user accepted 2.3 and requested a commit followed by 2.4. Committed the accepted section/code and supporting records as `5d78542` (`feat: pair section 2.3 with input error handling`) before beginning this text phase. Nothing pushed or published.
+
+**Status:** Accepted when the user said “great, commit and move on to 3.1.” Matching tests and the ordered route are verified. The user then clarified that Chapter 3 section planning precedes authoring.
+
+**Scope:** a test-only module in the manuscript, direct tests for one/missing/extra filenames, and an intentional ignored-extra-arguments regression followed by restoration. Current page, navigation, author records, and one test module in main.rs. No production change, dependencies, file fixtures, or process framework. The tests prove argument policy, not file reads or terminal behavior; manual CLI checks remain distinct.
+
+**Visual approach:** existing listings and test diagnostic excerpts suffice; no screenshots or browser automation for routine prose/code edits.
+
+**Checks observed for 2.4:** official Rust testing, test organization, test-running, and assert_eq references checked. Both authored test additions reconstruct the complete listing from actual 2.3; regression/restoration returns to that listing. This validates source consistency only. Site check reported zero diagnostics and build succeeded with existing optional-content/sitemap notices. All six pages return HTTP 200, and local links/anchors plus manuscript reference URLs/fragments resolve. All five rlox files match HEAD; no proposed tests executed or compiled. git diff --check passed. No browser/screenshots.
+
+**Implementation evidence:** followed the exact ordered route from accepted 2.3: baseline cargo test had no tests; appended the one-filename test and observed it pass; added the two rejection tests and observed all pass; applied the deliberate is_empty regression and observed only rejects_extra_filenames fail, with left Some("hello.lox") and right None; restored the length guard and observed all three pass. Ran CLI success, usage failure, and successful recovery in order. Independent CLI checks confirmed exact stdout/stderr and exit status. Formatting and Clippy with warnings denied pass. Main matches the complete listing byte for byte; production code, hello.lox, manifest, lockfile, and ignore file match HEAD. No manuscript correction was needed. No repeated site/browser checks; existing macOS toolchain only, not cross-platform verification.
+
+**Review focus:** direct tests and the observed regression/restoration protect the intended filename rule. File-I/O and terminal behavior remain separately checked rather than claimed as unit-test coverage. No unfinished implementation work remains within 2.4; the user accepted the combined endpoint.
+
 ## Handoff
 
-Accepted starting point: Section 2.2 source-reading Rust and hello.lox in `9520c43`. Current authorized action: commit accepted Section 2.3 and its matching Rust, then draft Section 2.4 for text review. Preserve the accepted implementation while drafting. No push or publication is authorized.
+Accepted starting point: Section 2.3 Rust and hello.lox in `5d78542`. Current authorized action: commit accepted Section 2.4 and its matching tests, then plan Chapter 3 section boundaries before drafting 3.1, as clarified by the user. No push or publication is authorized.
 
 **Status meanings:** Proposed = described but not authorized; In progress = authorized work underway; Ready for review = delivered evidence awaiting user judgment, with phase stated; Revision requested = current work remains active; Accepted = explicit user approval with conversation evidence recorded.

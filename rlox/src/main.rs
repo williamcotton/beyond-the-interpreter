@@ -27,3 +27,27 @@ fn filename_from_args(args: &[String]) -> Option<&str> {
 
     Some(&args[0])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::filename_from_args;
+
+    #[test]
+    fn accepts_one_filename() {
+        let args = vec![String::from("hello.lox")];
+
+        assert_eq!(filename_from_args(&args), Some("hello.lox"));
+    }
+
+    #[test]
+    fn rejects_missing_filename() {
+        assert_eq!(filename_from_args(&[]), None);
+    }
+
+    #[test]
+    fn rejects_extra_filenames() {
+        let args = vec![String::from("hello.lox"), String::from("other.lox")];
+
+        assert_eq!(filename_from_args(&args), None);
+    }
+}

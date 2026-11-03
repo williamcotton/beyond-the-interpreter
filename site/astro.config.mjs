@@ -21,6 +21,7 @@ export default defineConfig({
             { label: '2.1 · Give the program a filename', link: '/chapter-2/2.1-filename/' },
             { label: '2.2 · Read the source', link: '/chapter-2/2.2-read-source/' },
             { label: '2.3 · Explain input failures', link: '/chapter-2/2.3-input-errors/' },
+            { label: '2.4 · Check the input rules', link: '/chapter-2/2.4-input-tests/' },
           ],
         },
       ],

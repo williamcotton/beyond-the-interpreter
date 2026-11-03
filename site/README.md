@@ -21,8 +21,11 @@ is `src/content/docs/chapter-2/2.2-read-source.mdx`, served at
 the ordered reader route is verified. Section 2.3 is at
 `src/content/docs/chapter-2/2.3-input-errors.mdx`, served at
 `/chapter-2/2.3-input-errors/`. Its text is approved; the matching Rust and
-ordered reader route are verified and accepted. Tests remain
-for Section 2.4; no later section has been implemented.
+ordered reader route are verified and accepted. The Section 2.4 test manuscript is
+`src/content/docs/chapter-2/2.4-input-tests.mdx`, served at
+`/chapter-2/2.4-input-tests/`. Its text is approved, and matching Rust tests
+and the ordered reader route (including regression/restoration) are verified
+and accepted. Production behavior remains as in 2.3.
 
 Astro and Starlight provide the publication; Starlight includes MDX support.
 The React integration and strict TypeScript configuration support future
