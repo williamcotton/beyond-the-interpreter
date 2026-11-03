@@ -1,6 +1,6 @@
 # Authoring status
 
-Last updated: 2026-11-02. This file records actual state and decisions, not future assignments. Read the [current brief](LESSON_BRIEF.md) for authorized work and the [roadmap](PROJECT_OUTLINE.md) for chapter coverage.
+Last updated: 2026-11-03. This file records actual state and decisions, not future assignments. Read the [current brief](LESSON_BRIEF.md) for authorized work and the [roadmap](PROJECT_OUTLINE.md) for chapter coverage.
 
 ## Accepted work
 
@@ -13,8 +13,8 @@ Section 1.1 demonstrates a code introduction, a meaningful one-line edit, comple
 
 ## Actual repository and capabilities
 
-- `site/`: Astro/Starlight publication with MDX, React integration, and strict TypeScript. The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; the proposed Section 1.2 was removed after scope review. Section 2.1 and its matching Rust endpoint are accepted; Section 2.2 and its matching Rust/sample are accepted; Section 2.3 and its matching Rust are accepted. Section 2.4 and its matching Rust/tests are accepted. Navigation includes only authored pages. Starlight supplies listings and a focused diff; no custom diff viewer or trace framework exists.
-- `rlox/`: one binary package named `rlox`, Rust edition 2024, no external dependencies. It reads the first supplied filename as UTF-8 and prints its contents without adding a newline. Missing or extra arguments print usage to stderr and fail; failed reads print a contextual stderr diagnostic and fail. Successful reads return success. Files are Cargo.toml, Cargo.lock, src/main.rs, .gitignore, and hello.lox. It does not scan tokens or execute Lox. Three unit tests check the filename policy; they do not cover file reads, stderr, or exit status.
+- `site/`: Astro/Starlight publication with MDX, React integration, and strict TypeScript. The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; the proposed Section 1.2 was removed after scope review. Section 2.1 and its matching Rust endpoint are accepted; Section 2.2 and its matching Rust/sample are accepted; Section 2.3 and its matching Rust are accepted. Section 2.4 and its matching Rust/tests are accepted. The Chapter 3 section frame is accepted; Section 3.1 and matching Rust are accepted. Navigation includes only authored pages. Starlight supplies listings and a focused diff; no custom diff viewer or trace framework exists.
+- `rlox/`: one binary package named `rlox`, Rust edition 2024, no external dependencies. Its `source FILE` command reads exactly one filename as UTF-8 and prints its contents without adding a newline. Missing or extra arguments print usage to stderr and fail; failed reads print a contextual stderr diagnostic and fail. Successful reads return success. Files are Cargo.toml, Cargo.lock, src/main.rs, .gitignore, and hello.lox. It does not scan tokens or execute Lox. Seven unit tests check filename policy and command selection; they do not cover file reads, stderr, or exit status.
 - `authoring/`: current roadmap, architecture, review guidance, status, and brief. No fixtures/replay framework or future crate scaffold exists.
 - Hosted CI, deployment, release artifacts, distribution, and cross-platform coverage: not established.
 
@@ -152,8 +152,34 @@ The user rejected the proposed greeting-process-test section as offering too lit
 
 **Review focus:** direct tests and the observed regression/restoration protect the intended filename rule. File-I/O and terminal behavior remain separately checked rather than claimed as unit-test coverage. No unfinished implementation work remains within 2.4; the user accepted the combined endpoint.
 
+## CH03-PLAN — Frame Chapter 3 sections
+
+**Authorization and commit:** the user accepted 2.4 and asked to commit it, then clarified that Chapter 3 planning should precede 3.1. The accepted endpoint was committed; at the user’s correction, the message was amended to `04d4575` (`feat: pair section 2.4 with filename policy tests`). A paired new lesson is a feat even when its Rust changes are tests. No push or publication.
+
+**Status:** Accepted when the user said “great, move on to 3.1.” The roadmap contains a two-part working frame: name the source operation with minimal manual dispatch; replace manual parsing with Clap’s declared interface and generated help. Both carry relevant contract checks; boundaries remain subject to actual writing review.
+
+**Agreed transition:** use `source FILE` to describe the actual capability and replace the bare-filename invocation. Do not claim tokens or execution, add future commands, or build a general hand parser. Source reading stays unchanged. Exact parser types, version/features, test migration, and manifests are not implementation decisions in this planning task.
+
+**Evidence:** inspected actual main/tests, current chapter outline, architecture, and review guidance. Current official Clap derive/Parser documentation supports the intended migration; no version selected or dependency added. Document consistency and git diff whitespace checked. All rlox files match the accepted commit. No MDX, site configuration, runtime, tests, builds, or visual inspection changed during planning.
+
+## CH03-01 — Give the operation a name
+
+**Authorization:** the user approved the Chapter 3 section frame and requested 3.1. The starting point remains `04d4575`. The section frame and this draft are uncommitted; no further commit is authorized.
+
+**Status:** Accepted when the user said “great, commit and move on to 3.2.” Matching implementation and ordered route are verified.
+
+**Scope:** introduce `rlox source FILE` through a small manual command selector, retaining the filename validator and file-read/output behavior. One helper, two main edits, a grouped test import, and direct command-boundary tests. No Clap, dependency, command enum, future commands, or new fixture. The explicitly approved command form replaces the bare-filename invocation. Existing 2.4 complete listings preserve the accepted earlier endpoint.
+
+**Visual approach:** existing source/output listings suffice; no routine browser/screenshots under the user’s proportional-check preference.
+
+**Checks observed for 3.1:** current official slice split_first, Option ?, String::as_str, and Rust Book match documentation checked; all four manuscript reference URLs/fragments resolve. Both focused edits plus helper/test additions reconstruct the complete final listing from actual Chapter 2 source. This checks text consistency, not compilation or reader-route behavior. Site check reported zero diagnostics and build succeeded with existing optional-content/sitemap notices. Seven local pages return HTTP 200 and local links/anchors resolve. All five rlox files match HEAD; no proposed Rust commands or temporary compilation. git diff --check passed; no browser/screenshots.
+
+**Implementation evidence:** followed the full displayed route from accepted Chapter 2: observed source-plus-filename rejected by the old program, added the selector, changed main and usage text, observed successful source output, all five usage failures, missing-file diagnostic, and documented recoveries; then updated the test import, added command tests, and ran cargo test. All seven tests pass; formatting and Clippy with warnings denied pass. Main matches the complete listing byte for byte. Direct executable checks verified exact stdout/stderr and exit status for success, missing/unknown/retired command forms, missing/extra filenames, and read failure. Filename validation, existing tests, file-read/output logic, and all other rlox files remain unchanged. No manuscript corrections needed; no repeated site/browser checks. Existing macOS toolchain only; no cross-platform verification.
+
+**Review focus:** matching text/code, the explicit invocation change, and separation of command selection from filename validation. No unfinished implementation work remains within 3.1; the user accepted the combined endpoint.
+
 ## Handoff
 
-Accepted starting point: Section 2.3 Rust and hello.lox in `5d78542`. Current authorized action: commit accepted Section 2.4 and its matching tests, then plan Chapter 3 section boundaries before drafting 3.1, as clarified by the user. No push or publication is authorized.
+Accepted starting point: Chapter 2 Rust/tests in `04d4575`; Chapter 3’s two-part working frame is accepted. Current authorized action: commit accepted 3.1 and matching Rust, then draft 3.2 for text review. No push or publication is authorized.
 
 **Status meanings:** Proposed = described but not authorized; In progress = authorized work underway; Ready for review = delivered evidence awaiting user judgment, with phase stated; Revision requested = current work remains active; Accepted = explicit user approval with conversation evidence recorded.

@@ -4,7 +4,7 @@
 
 An interactive Rust companion to Robert Nystrom’s *Crafting Interpreters*. Readers build `rlox`: two Lox execution engines and the tools to inspect, edit, debug, test, and distribute a language.
 
-The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; tests will enter in Chapter 2 alongside reading source. Section 2.1 and its matching Rust endpoint are accepted. Section 2.2 and its matching Rust/sample are accepted. Section 2.3 and its matching Rust are accepted. Section 2.4 and its matching unit tests are accepted. The current program reads exactly one supplied file, prints its source text, and reports input errors on stderr with a failure status. Later chapters describe planned work, not implemented capabilities.
+The introduction and Chapter 1 are accepted. Chapter 1 consists of Section 1.1 only; tests will enter in Chapter 2 alongside reading source. Section 2.1 and its matching Rust endpoint are accepted. Section 2.2 and its matching Rust/sample are accepted. Section 2.3 and its matching Rust are accepted. Section 2.4 and its matching unit tests are accepted. Section 3.1 and its matching Rust are accepted. The current `source FILE` command reads exactly one supplied file, prints its source text, and reports input errors on stderr with a failure status. Later chapters describe planned work, not implemented capabilities.
 
 ## Read the book locally
 
@@ -24,7 +24,7 @@ With Rust 1.85 or newer installed, from the repository root:
 
 ```sh
 cd rlox
-cargo run -- hello.lox
+cargo run -- source hello.lox
 ```
 
 Expected program output:
@@ -33,7 +33,7 @@ Expected program output:
 print "Hello, Lox!";
 ```
 
-The local endpoint was verified using rustc and Cargo 1.95.0 on macOS. Formatting, Clippy, and Cargo test passed; three unit tests check the filename policy. The Section 2.3 route established usage/read diagnostics and recovery; Section 2.4 verified the test additions, a deliberate regression, restoration, and unchanged CLI behavior. Direct execution checked exact output and UTF-8/error behavior; see authoring status for details. Fresh installation and other platforms have not been tested.
+The local endpoint was verified using rustc and Cargo 1.95.0 on macOS. Formatting, Clippy, and Cargo test passed; seven unit tests check filename policy and command selection. The Section 2.3 route established usage/read diagnostics and recovery; Section 2.4 verified the test additions, a deliberate regression, restoration, and unchanged CLI behavior. Section 3.1 verified the new invocation, invalid commands, read failure, recovery, and direct stdout/stderr/exit behavior; see authoring status for details. Fresh installation and other platforms have not been tested.
 
 ## How we work
 

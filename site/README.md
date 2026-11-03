@@ -25,7 +25,11 @@ ordered reader route are verified and accepted. The Section 2.4 test manuscript 
 `src/content/docs/chapter-2/2.4-input-tests.mdx`, served at
 `/chapter-2/2.4-input-tests/`. Its text is approved, and matching Rust tests
 and the ordered reader route (including regression/restoration) are verified
-and accepted. Production behavior remains as in 2.3.
+and accepted. Production behavior remains as in 2.3. Section 3.1 is
+at `src/content/docs/chapter-3/3.1-source-command.mdx`, served at
+`/chapter-3/3.1-source-command/`. Its text is approved and matching Rust/ordered
+route are verified and accepted. Current invocation:
+`cargo run -- source hello.lox` from rlox/.
 
 Astro and Starlight provide the publication; Starlight includes MDX support.
 The React integration and strict TypeScript configuration support future

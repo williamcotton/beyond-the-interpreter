@@ -133,6 +133,13 @@ The `Tokens` variant illustrates the later command shape; expose it only when it
 
 **Checkpoint:** Command parsing, validation, and honest generated help work; `rlox tokens FILE` becomes available with scanning.
 
+**Working section frame:** accepted when the user said “great, move on to 3.1” after reviewing the proposed breakdown. These boundaries remain adjustable through actual text review:
+
+- **3.1 — Give the operation a name:** introduce `rlox source FILE` with a small manual dispatcher. Select the command, apply the existing one-filename rule to its arguments, and route to the existing source read/output. Explain the intentional transition from `rlox FILE`; reject missing/unknown commands and invalid filename counts. Keep tests alongside the changed contract. No help parser, aliases, flags, dependencies, or language behavior.
+- **3.2 — Describe the command with Clap:** replace the manual parser with Clap’s derive API, keeping the same source operation. Teach the dependency/derive feature, CLI struct and subcommand enum, generated help, and parsing/validation behavior. Migrate relevant tests to the declared CLI using supplied arguments, and retire superseded manual parsing code/tests. Show help success versus usage failures separately from file-read failures. Verify exact dependency compatibility and lockfile changes when authoring this section; no version is selected here.
+
+**Chapter boundary:** source reading/output remains the only operation. `source` describes that capability honestly; `run` and `tokens` wait for actual execution and scanning. The command form replaces the bare-filename form rather than adding compatibility aliases. No second command is invented to justify dispatch, and no separate section is reserved for repeating tests already needed by these changes. Review actual 3.1 scope before drafting 3.2; split the migration only if its explanation warrants it.
+
 ## Chapter 4 — Source Locations, Workspaces, and CI
 
 **Objective:** Establish source-coordinate types and a small workspace.

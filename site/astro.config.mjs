@@ -24,6 +24,12 @@ export default defineConfig({
             { label: '2.4 · Check the input rules', link: '/chapter-2/2.4-input-tests/' },
           ],
         },
+        {
+          label: '3 · Commands and Clap',
+          items: [
+            { label: '3.1 · Give the operation a name', link: '/chapter-3/3.1-source-command/' },
+          ],
+        },
       ],
       customCss: ['./src/styles/book.css'],
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },

@@ -1,0 +1,353 @@
+---
+title: 3.1 — Give the operation a name
+slug: chapter-3/3.1-source-command
+description: Select a source-display command and validate its filename using a small manual dispatcher.
+prev:
+  link: /chapter-2/2.4-input-tests/
+  label: 2.4 · Check the input rules
+next: false
+---
+
+<p className="book-subtitle">Chapter 3 · Commands and Clap</p>
+
+So far, every valid invocation of `rlox` does the same thing: read a file and
+print its source. As the tool gains operations, a filename alone won’t tell
+it which one we want. We’ll give the existing operation a name:
+
+```sh
+cargo run --quiet -- source hello.lox
+```
+
+Here, `source` means “display this file’s source text.” The filename follows
+the command. This section changes the interface from `rlox FILE` to
+`rlox source FILE`; the old bare-filename form will no longer be accepted.
+The file’s contents and the work needed to read them stay the same.
+
+Start with [Section 2.4](/chapter-2/2.4-input-tests/), including its tests and
+`hello.lox`. Keep the terminal in **`rlox/`**. Try the new command before
+changing anything:
+
+```sh
+cargo run --quiet -- source hello.lox
+```
+
+The Chapter 2 program should reject it with an unsuccessful exit and this
+stderr message:
+
+```text title="Current standard error"
+Usage: rlox <file>
+```
+
+Our old rule sees two arguments where it expects one. We need to distinguish
+the operation name from that operation’s arguments.
+
+## Separate the command from its arguments
+
+We’ll keep `filename_from_args` for its existing job: checking that a sequence
+contains exactly one filename. Add a function around it that selects the
+command first. Both functions will inspect borrowed arguments; file reading
+will remain in `main`.
+
+A slice’s
+[`split_first()`](https://doc.rust-lang.org/std/primitive.slice.html#method.split_first)
+method gives us either `None` for an empty slice or `Some` containing a pair:
+a reference to the first element and a slice of everything after it. Rust
+calls such a pair a **tuple**. We can bind its two parts with
+`let (command, command_args) = ...`.
+
+We need to stop if there is no first element. Because our function returns
+`Option`, we can use the **`?` operator** on the `Option` from `split_first`.
+For `Some`, `?` yields the contained pair. For `None`, it immediately returns
+`None` from this function. It doesn’t panic or print a message; `main` will
+still decide how to report invalid input. The standard-library
+[Option documentation](https://doc.rust-lang.org/std/option/index.html#the-question-mark-operator-)
+explains this use of `?`.
+
+Add this function **after `filename_from_args` and before `#[cfg(test)]` in
+`rlox/src/main.rs`**:
+
+```rust title="rlox/src/main.rs · add before the test module"
+fn source_filename_from_args(args: &[String]) -> Option<&str> {
+    let (command, command_args) = args.split_first()?;
+
+    match command.as_str() {
+        "source" => filename_from_args(command_args),
+        _ => None,
+    }
+}
+```
+
+`command` refers to the first owned string. Its
+[`as_str()`](https://doc.rust-lang.org/std/string/struct.String.html#method.as_str)
+method gives us a text view to match against `"source"`. That arm delegates
+the remaining arguments to our existing validator. The `_` pattern matches
+any other command name and rejects it. Like the `match` expressions we used
+in Chapter 2, this final expression supplies the function’s result. The Rust
+Book’s [match discussion](https://doc.rust-lang.org/book/ch06-02-match.html)
+explains how patterns select an arm.
+
+For `source hello.lox`, the first element is `source`, and `command_args`
+contains just `hello.lox`. For `source` alone, the command matches but the
+filename validator receives an empty slice and returns `None`. An extra
+filename is rejected by that same validator.
+
+The dispatch decision is the `match`: it selects how to handle a recognized
+operation. We have one operation today, so its result can still be just a
+filename. We’ll describe commands as structured values when we introduce
+Clap in the next section.
+
+## Connect the command to main
+
+`main` already handles `Some(filename)` by reading the file, and `None` by
+printing usage and returning failure. Keep that flow. Call the new selector
+instead of the filename-only validator, and update the usage message to name
+the operation. Complete both edits before running again:
+
+```diff title="rlox/src/main.rs · command selection in main"
+ fn main() -> ExitCode {
+     let args: Vec<String> = std::env::args().skip(1).collect();
+-    let filename = match filename_from_args(&args) {
++    let filename = match source_filename_from_args(&args) {
+         Some(filename) => filename,
+         None => {
+-            eprintln!("Usage: rlox <file>");
++            eprintln!("Usage: rlox source <file>");
+             return ExitCode::FAILURE;
+         }
+     };
+```
+
+Everything after that selection stays in place: the file read, its diagnostic,
+source output, and successful exit. Run:
+
+```sh
+cargo run --quiet -- source hello.lox
+```
+
+Expected stdout:
+
+```text title="Source output"
+print "Hello, Lox!";
+```
+
+Now try these **intentional failures**, one command at a time:
+
+```sh
+cargo run --quiet --
+cargo run --quiet -- hello.lox
+cargo run --quiet -- unknown hello.lox
+cargo run --quiet -- source
+cargo run --quiet -- source hello.lox other.lox
+```
+
+Each should exit unsuccessfully, leave stdout empty, and write this message
+to stderr:
+
+```text title="Standard error · each invalid command"
+Usage: rlox source <file>
+```
+
+These cover a missing command, the retired invocation, an unknown command,
+and missing or extra filenames for `source`. The message is deliberately
+simple; generated help belongs to the next step.
+
+Recover with:
+
+```sh
+cargo run --quiet -- source hello.lox
+```
+
+The output should be the source again. To check that read failures still
+work through the new command, choose a nonexistent file. Assuming
+`missing.lox` is absent from `rlox/`, run:
+
+```sh
+cargo run --quiet -- source missing.lox
+```
+
+It should exit unsuccessfully with empty stdout. The stderr line should
+begin with `rlox: could not read 'missing.lox':`, followed by the operating
+system’s error message, just as in Section 2.3. Then recover again:
+
+```sh
+cargo run --quiet -- source hello.lox
+```
+
+## Check the new command boundary
+
+Our existing tests still check filename policy; they should remain unchanged.
+They don’t check whether the command name was recognized or whether it was
+removed before filename validation. Add direct tests for that boundary.
+
+First, bring the new function into scope in **`mod tests`**:
+
+```diff title="rlox/src/main.rs · test import"
+ mod tests {
+-    use super::filename_from_args;
++    use super::{filename_from_args, source_filename_from_args};
+```
+
+The braces group two names from the same parent module. Append the following
+functions **inside `mod tests`, after the existing tests and before its closing
+brace**:
+
+```rust title="rlox/src/main.rs · add inside mod tests"
+#[test]
+fn accepts_source_command() {
+    let args = vec![String::from("source"), String::from("hello.lox")];
+
+    assert_eq!(source_filename_from_args(&args), Some("hello.lox"));
+}
+
+#[test]
+fn requires_command() {
+    assert_eq!(source_filename_from_args(&[]), None);
+}
+
+#[test]
+fn rejects_other_command_names() {
+    let args = vec![String::from("unknown"), String::from("hello.lox")];
+    assert_eq!(source_filename_from_args(&args), None);
+
+    let args = vec![String::from("hello.lox")];
+    assert_eq!(source_filename_from_args(&args), None);
+}
+
+#[test]
+fn source_requires_one_filename() {
+    let args = vec![String::from("source")];
+    assert_eq!(source_filename_from_args(&args), None);
+
+    let args = vec![
+        String::from("source"),
+        String::from("hello.lox"),
+        String::from("other.lox"),
+    ];
+    assert_eq!(source_filename_from_args(&args), None);
+}
+```
+
+These use the same test tools as Section 2.4. The success case requires the
+returned text to be the filename, not `source`. The failure cases check
+command selection and that it passes the remaining arguments to the filename
+rule. Each `let args` creates the input for the assertion that follows it;
+a later binding with the same name replaces the earlier binding in that scope.
+
+Run:
+
+```sh
+cargo test
+```
+
+All named tests should report `ok`, including the existing filename-policy
+tests. The new assertions inspect arguments directly; the terminal checks
+above exercise the connection to `main`, file reading, and output.
+
+<details>
+<summary>Complete rlox/src/main.rs</summary>
+
+```rust title="rlox/src/main.rs · complete file"
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let filename = match source_filename_from_args(&args) {
+        Some(filename) => filename,
+        None => {
+            eprintln!("Usage: rlox source <file>");
+            return ExitCode::FAILURE;
+        }
+    };
+    let source = match std::fs::read_to_string(filename) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("rlox: could not read '{filename}': {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    print!("{source}");
+    ExitCode::SUCCESS
+}
+
+fn filename_from_args(args: &[String]) -> Option<&str> {
+    if args.len() != 1 {
+        return None;
+    }
+
+    Some(&args[0])
+}
+
+fn source_filename_from_args(args: &[String]) -> Option<&str> {
+    let (command, command_args) = args.split_first()?;
+
+    match command.as_str() {
+        "source" => filename_from_args(command_args),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{filename_from_args, source_filename_from_args};
+
+    #[test]
+    fn accepts_one_filename() {
+        let args = vec![String::from("hello.lox")];
+
+        assert_eq!(filename_from_args(&args), Some("hello.lox"));
+    }
+
+    #[test]
+    fn rejects_missing_filename() {
+        assert_eq!(filename_from_args(&[]), None);
+    }
+
+    #[test]
+    fn rejects_extra_filenames() {
+        let args = vec![String::from("hello.lox"), String::from("other.lox")];
+
+        assert_eq!(filename_from_args(&args), None);
+    }
+
+    #[test]
+    fn accepts_source_command() {
+        let args = vec![String::from("source"), String::from("hello.lox")];
+
+        assert_eq!(source_filename_from_args(&args), Some("hello.lox"));
+    }
+
+    #[test]
+    fn requires_command() {
+        assert_eq!(source_filename_from_args(&[]), None);
+    }
+
+    #[test]
+    fn rejects_other_command_names() {
+        let args = vec![String::from("unknown"), String::from("hello.lox")];
+        assert_eq!(source_filename_from_args(&args), None);
+
+        let args = vec![String::from("hello.lox")];
+        assert_eq!(source_filename_from_args(&args), None);
+    }
+
+    #[test]
+    fn source_requires_one_filename() {
+        let args = vec![String::from("source")];
+        assert_eq!(source_filename_from_args(&args), None);
+
+        let args = vec![
+            String::from("source"),
+            String::from("hello.lox"),
+            String::from("other.lox"),
+        ];
+        assert_eq!(source_filename_from_args(&args), None);
+    }
+}
+```
+
+</details>
+
+We now name the operation before supplying its arguments. The small dispatcher
+makes that boundary visible, and the existing filename rule still does its
+job. Next we’ll replace manual command parsing with a declared interface that
+can validate arguments and generate help from the same description.
