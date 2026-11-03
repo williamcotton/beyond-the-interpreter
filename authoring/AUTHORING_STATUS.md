@@ -274,8 +274,18 @@ The user rejected the proposed greeting-process-test section as offering too lit
 
 **Local implementation evidence:** root workflow created; parsed structure equals reader YAML after removing the sole agreed working-directory adaptation. Local format/Clippy/workspace test commands pass (six text and five app tests). No Rust or dependency changes and no local toolchain setup executed. gh authentication and remote reachability verified. Pushed implementation as `96d1d19` to origin/main. [Rust CI run 41619820330](https://github.com/williamcotton/beyond-the-interpreter/actions/runs/41619820330) passed for that exact SHA: checkout, Rust setup, formatting, Clippy, and eleven tests. Logs show Ubuntu 24.04.5 and rustc/Cargo 1.99.1. Verified the run SHA, job/step conclusions, and logs with gh. No corrections were required.
 
+## CH05-PLAN — Frame Chapter 5
+
+**Authorization:** the user accepted 4.4 and requested a commit followed by Chapter 5 section planning. The prior implementation/evidence commits were already present; acceptance was committed as `3eb9e14` (`docs: record acceptance of chapter 4 ci lesson`). No new push performed.
+
+**Status:** Accepted when the user approved the two-section breakdown and requested committing it before drafting 5.1.
+
+**Proposal:** turn characters into ranged tokens, then introduce lookahead through paired operators. These are candidate teaching boundaries, not a fixed section count. Introduce a useful syntax crate with its first scanner behavior and tests; keep CLI unchanged. Place the first character-cursor interaction at the mechanism it explains, with authored observations checked against Rust rather than a JavaScript scanner. Preserve the Chapter 6–8 boundaries. Details are in the current brief and Chapter 5 roadmap frame.
+
+**Evidence:** inspected actual app/text sources and workspace manifests; compared chapter coverage and architecture. Documentation links and whitespace checked. No Rust, manuscript, dependency, CI, or site changes; no unrelated checks or screenshots.
+
 ## Handoff
 
-Accepted starting point: Section 4.3 workspace in `13c8e8e`. Section 4.4 and our adapted root workflow are accepted. No unfinished implementation work remains. The user authorized committing the acceptance record and planning Chapter 5, without drafting or implementing it yet.
+Accepted starting point: Section 4.4 and root CI, implementation `96d1d19`, evidence `779f648`, acceptance `3eb9e14`. Current scope: Chapter 5 planning documents, Ready for review. No implementation is in progress. Next permitted action: revise the plan in response to review; await authorization before drafting the opening section, and text approval before implementing it.
 
 **Status meanings:** Proposed = described but not authorized; In progress = authorized work underway; Ready for review = delivered evidence awaiting user judgment, with phase stated; Revision requested = current work remains active; Accepted = explicit user approval with conversation evidence recorded.

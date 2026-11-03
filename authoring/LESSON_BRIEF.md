@@ -1,39 +1,36 @@
 # Current assignment
 
-## CH04-04 — Run the checks automatically (implementation and hosted verification)
+## CH05-PLAN — Frame Chapter 5
 
-**Status:** Accepted when the user requested committing and moving on to Chapter 5 planning. Implementation committed and pushed; hosted CI passed.
+**Status:** Accepted when the user approved the two-section breakdown and requested committing it before 5.1.
 
-**Authorization:** the user accepted 4.3 and requested committing it before 4.4. Accepted endpoint committed as `13c8e8e` (`feat: pair section 4.3 with app and text workspace`). During drafting, the user identified the reader/repository-root mismatch and approved separating the reader’s Rust repository from this book’s monorepo. The user confirmed our workflow belongs at this repository root, approved the text, and explicitly requested updating the codebase, pushing to origin, and observing CI from the CLI.
+**Authorization:** the user accepted Section 4.4 and requested a commit followed by outlining Chapter 5. The implementation and hosted evidence were already committed as 96d1d19 and 779f648. Acceptance is recorded in 3eb9e14. This assignment authorizes planning documents, not Chapter 5 manuscript, Rust, or visual implementation. No new push is requested.
 
-**Reader question:** how can the same workspace checks run on a GitHub revision and show what failed?
+**Accepted starting point:** Chapter 4’s app/text workspace, source-display CLI, safe UTF-8 byte ranges and file origins, and passing root GitHub workflow. Actual workspace manifests, text types/tests, and CLI inspected. No syntax crate or scanner exists.
 
-**Scope:** manuscript at `site/src/content/docs/chapter-4/4.4-ci.mdx`, navigation and records. Propose one GitHub Actions job: checkout, stable Rust with rustfmt/Clippy, formatting, workspace Clippy, workspace tests. Keep Rust sources, manifests, lockfile, and CLI unchanged. No CI caches, matrix, deployment, artifacts, or extra helper scripts.
+**Reader question:** how do we turn source characters into token kinds while retaining the exact source bytes each token occupies?
 
-**Root distinction (agreed):** the reader’s Rust workspace directory is their Git repository root. Their workflow is `.github/workflows/ci.yml` beside Cargo.toml and crates/, with shell steps at that root; no cd .. or working-directory: rlox. Our book repository contains site/, authoring/, and rlox/; its actual workflow is `/Users/williamcotton/Projects/beyond-the-interpreter/.github/workflows/ci.yml` with this job setting:
+**Concrete progression:** `()` establishes token emission and ranges; `!` versus `!=` then reveals why one-character decisions are insufficient. `!==` and `!(` expose conditional consumption and the need to preserve a character after failed lookahead. These are scanner inputs, not yet executable Lox programs.
 
-```yaml
-defaults:
-  run:
-    working-directory: rlox
-```
+**Proposed teaching boundaries:**
 
-That is the sole authoring-layout adaptation to the reader workflow. Document and verify this difference explicitly during implementation; do not put an inert workflow under rlox/.github or teach the book’s folder layout as a reader prerequisite. Our accepted code already supplies the workspace-root reader checks.
+- **Read a character, emit a token:** a useful rlox-syntax library depending on rlox-text; SyntaxKind and Token; scan a small input into a collection using character iteration and byte offsets. Recognize parentheses and single-character !/=, retain TextRange, and check kinds/source slices. Empty input is a coherent endpoint. Consume unmatched characters into a temporary Error token so the loop is total and makes progress, without expanding into Chapter 6’s error/trivia lesson. Introduce workspace wiring alongside the behavior that needs it.
+- **Look ahead before choosing:** distinguish !=/== from !/= without consuming a nonmatching next character. Teach peekable iteration and conditional advancement at need. Check successful/failed lookahead, adjacent operators, trailing operators, and exact source ranges. Extend the cursor visual alongside this explanation.
 
-**Workflow choices for review:** ubuntu-24.04 hosted image; actions/checkout v7.0.1 pinned to verified official commit 3d3c42e5aac5ba805825da76410c181273ba90b1; contents: read; persist-credentials: false. Rustup is present in the current official image; install/select stable with minimal profile plus rustfmt/clippy and print versions in job logs. Setup runs on the GitHub runner, not the user’s local machine. Current official action/release/tag, runner-image, syntax, secure-use, and rustup docs checked. No compiler pin or new Rust dependency.
+These are candidate boundaries, not a prescribed section count or detailed backlog. The opening section should deliver a working tiny scanner; review its actual explanation before deciding whether to keep or adjust the next boundary. No separate type-only, crate-only, or testing-only lesson is proposed.
 
-**Teaching route:** rerun known checks locally; confirm reader workspace Git root/remote (link precise setup prerequisite); create complete workflow; explain events/job/steps/setup and read permission; commit/push reader’s source and workflow to their own GitHub repo; inspect exact commit’s Actions job/logs; reproduce a failing command and recover if needed. No deliberately broken push or forced failure is needed. Complete YAML is the lesson artifact.
+**New Rust reasoning:** enum variants as token categories; a struct pairing kind/range; Vec accumulation; char_indices byte offsets; match dispatch; iteration exhaustion; peekable lookahead and its borrowing pattern. Explain each at its first consequential edit. Reuse existing TextRange construction and slicing; do not add coordinate APIs without a current need. Exact signatures and helper choices are for the text draft, with complete file/import/manifest changes shown there.
 
-**Verification boundaries:** text phase checks YAML syntax/declared steps, action SHA/release provenance, documentation/links, site check/build, and unchanged actual Rust/workflow state. Text approval has now been followed by local implementation. After implementation authorization, write our adapted root workflow, validate the sole layout difference, run local checks, and prepare the concrete result for review. The current user request supplies explicit commit/push authorization. Only an observed passing run establishes hosted CI success.
+**Architecture:** syntax owns scanning and depends on text; app remains unchanged. No new registry dependency is proposed. The handwritten scanner is temporary, extended only to Chapter 6’s limited corpus before the Chapter 7 Logos migration. No file identity is needed inside a scanner of one supplied source string.
 
-**Text-phase checks observed:** reader YAML parses with the existing site YAML parser; events, permission, checkout pin/input, runner, root directory, Rust setup, and all three exact check commands match the intended configuration. Confirmed official v7.0.1 tag/commit and runner/toolchain documentation; all seven reader reference URLs/fragments resolve. Site check reported zero diagnostics and build succeeded with existing optional-content/sitemap notices. Twelve local routes return HTTP 200 and local links/anchors resolve. All tracked rlox files match HEAD. Neither root nor nested actual CI workflow exists; no proposed Rust/check/setup/publication commands executed. git diff --check passed; no browser/screenshots. Hosted behavior and reader commit/push route remain unverified.
+**Visual purpose:** answer “which character has been consumed, which is only being inspected, and which bytes belong to the emitted token?” Introduce the character-cursor diagram with the first cursor/range explanation, then show successful and failed lookahead at that mechanism’s first explanation. Use checked authored traces of tiny inputs, not a JavaScript lexer. Include initially useful/static text, keyboard controls, byte labels, non-color state cues, narrow-screen support, and reduced-motion behavior. This is planning only; no component or trace infrastructure is authorized yet.
 
-**Visual approach:** existing workflow listing and named job/step logs suffice; no custom UI or routine browser/screenshots.
+**References for drafting:** the roadmap’s Crafting Interpreters Chapter 4 reference; precise official Rust Book material for enums, match and vectors, and standard-library documentation for str::char_indices and iterator lookahead. Inspect current official documentation before selecting APIs; planning makes no new version or API compatibility claim.
 
-**Implementation observed:** created .github/workflows/ci.yml at our repository root. YAML parses; removing the agreed defaults.run.working-directory: rlox makes its parsed structure identical to the reader workflow. Local formatting, workspace Clippy with warnings denied, and all eleven tests pass. Rust sources/manifests/lockfile remain unchanged; no local Rustup/default-toolchain changes. CLI authentication and remote access confirmed. The current request authorizes the lesson/workflow commit, origin push, CI observation, and necessary corrections within this scope.
+**Excluded:** identifiers, whitespace/comment handling, developed unknown-character recovery and lossless partition invariants (Chapter 6); numbers/strings/keywords and Logos (Chapter 7); tokens CLI (Chapter 8); parser, EOF convention, diagnostics infrastructure, source database, file IO changes, broad SyntaxKind inventory, generic visualization machinery.
 
-**Excluded:** deployment, unrelated repository/remote changes, local global-toolchain changes, Chapter 5 authoring.
+**Planned evidence after text approval:** follow every displayed creation/edit/command from the accepted workspace in order; compare complete files and source-range slices; meaningful scanner tests including byte boundaries and progress; workspace format/Clippy/tests; existing CLI behavior preserved. Verify curated visual observations against native scanner results, and inspect the actual rendered controls/layout when introduced. No new runtime/site tests or builds are needed for this planning task.
 
-**Hosted evidence:** pushed `96d1d19` (`feat: pair section 4.4 with github actions workspace checks`) to origin/main. [Rust CI run 41619820330](https://github.com/williamcotton/beyond-the-interpreter/actions/runs/41619820330) completed successfully for that exact revision. Checkout, Rust setup, formatting, Clippy, and all eleven tests passed on Ubuntu 24.04.5 with rustc/Cargo 1.99.1. Verified run SHA, job/step conclusions, and logs using gh. No implementation or manuscript correction was needed.
+**Checks now:** actual starting files and owning guidance inspected; Chapter 5 coverage compared with Chapters 6–8 and architecture; planning links and whitespace checked. No manuscript, Rust, workflow, dependency, or website changes.
 
-**Stopping point:** combined endpoint accepted; no unfinished work remains. The next authorized task is Chapter 5 planning only.
+**Stopping point:** planning accepted. The user authorized drafting 5.1; Rust implementation still waits for text approval.

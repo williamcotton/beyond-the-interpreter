@@ -251,6 +251,18 @@ Build the first interactive character-cursor diagram.
 
 **Checkpoint:** A small, tested handwritten lexer.
 
+**Chapter 5 authoring frame (accepted for drafting):** start from the accepted Chapter 4 workspace and ask how source characters become tokens that still point to their original bytes. Keep the handwritten scanner deliberately limited; Chapter 6 owns variable-length tokens/trivia and Chapter 7 replaces the mechanics with Logos.
+
+The user approved beginning with 5.1 and 5.2 along these boundaries; adjust them through review of the actual writing:
+
+- **Read a character, emit a token.** Open with `()` and the need to distinguish source text from token kinds. Introduce the useful `rlox-syntax` library and its dependency on `rlox-text` together with a tiny scanner, rather than a separate scaffolding lesson. Explain SyntaxKind, Token, character iteration with byte offsets, and exclusive token ends. Start with parentheses and single-character `!`/`=`. Tests observe kinds and selected source slices, including empty input. A temporary unmatched-character fallback consumes one complete character as Error; Chapter 6 develops that behavior and its coverage.
+- **Look ahead before choosing.** Contrast `!` with `!=`, and `=` with `==`. Add non-consuming lookahead and conditional consumption, explaining why a failed comparison must leave the next character for the next token. Check adjacent operators, a trailing operator, and byte-range boundaries. Extend the character-cursor visual where lookahead first needs explanation.
+
+The first interactive character-cursor diagram should connect source characters, UTF-8 byte positions, consumed input, and emitted token ranges. Use small authored cases checked against this lesson’s Rust implementation; no JavaScript scanner or generic tracing framework. Include a static/text explanation and accessible controls. Detailed placement and fixtures belong to the text brief before implementation.
+
+Each boundary should reach a working library endpoint. The app and its source command stay unchanged; token inspection belongs to Chapter 8. No file database, parser, EOF-token convention, new registry dependency, or complete Lox token inventory is needed here. Exact APIs and further splits/consolidation remain subject to text review.
+
+
 ## Chapter 6 — Tokens That Grow
 
 **Objective:** Extend the handwritten scanner just enough to learn variable-length matching.
