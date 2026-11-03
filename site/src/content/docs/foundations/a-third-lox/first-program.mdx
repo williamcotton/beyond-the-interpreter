@@ -1,0 +1,190 @@
+---
+title: 1.1 — A program we can run
+description: Create a small Rust executable and follow the path from source code to terminal output.
+prev:
+  link: /
+  label: Introduction
+next: false
+---
+
+<p className="book-subtitle">Chapter 1 · A Third Lox</p>
+
+Before we can ask a program to interpret Lox, we need a program we can run.
+Our first version of `rlox` will do one thing: print a greeting in the terminal.
+That gives us a short trip through the tools we’ll use throughout the book:
+write Rust, compile it, and observe what the executable does.
+
+Nystrom introduces his Java and C implementations in the
+[opening chapters of *Crafting Interpreters*](https://craftinginterpreters.com/introduction.html#the-first-interpreter).
+Ours starts with Rust. If you’re new to it, the Rust Book’s
+[“Hello, World!”](https://doc.rust-lang.org/book/ch01-02-hello-world.html#anatomy-of-a-rust-program)
+and [“Hello, Cargo!”](https://doc.rust-lang.org/book/ch01-03-hello-cargo.html)
+are useful companions to this section.
+
+## Get Rust ready
+
+We need two tools: `rustc`, the Rust compiler, and Cargo, which manages Rust
+packages and coordinates building and running them. The usual way to install
+both is through **rustup**, Rust’s toolchain manager. Use its default stable
+toolchain.
+
+On macOS or Linux, the official installer can be started from a terminal:
+
+```sh
+curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf | sh
+```
+
+On Windows, use the installer linked from the Rust Book’s
+[Windows installation instructions](https://doc.rust-lang.org/book/ch01-01-installation.html#installing-rustup-on-windows).
+Follow its prompts to install the Visual Studio C++ build tools as well.
+Rust needs a linker to produce the executable. On macOS, install the command-line
+developer tools with `xcode-select --install` if they aren’t already installed.
+On Linux, install your distribution’s GCC or Clang development tools; on Ubuntu,
+these are available through the `build-essential` package.
+
+If Rust is already installed, you can skip installation. We’ll use the Rust 2024
+edition, which requires Rust 1.85 or newer. An edition selects a set of language
+rules for a package; it isn’t a requirement to use a compiler released in that year.
+
+Open a new terminal after installation so it picks up the tools, then check:
+
+```sh
+rustc --version
+cargo --version
+```
+
+Each command should print its name and a version number. If either command
+isn’t found, check the Rust Book’s
+[installation troubleshooting](https://doc.rust-lang.org/book/ch01-01-installation.html#troubleshooting)
+before continuing. We’ll let Cargo invoke the compiler for our builds.
+
+## Create the package
+
+Choose a directory to hold your work for the book. If you’re using the book’s
+repository, start at its root, alongside `site/`. Otherwise, start in an empty
+directory of your own. We’ll call this the **project root**. You won’t need to
+build the website to follow the Rust lessons.
+
+From that directory, run:
+
+```sh
+cargo new rlox --bin --edition 2024 --vcs none
+cd rlox
+```
+
+`cargo new` creates the `rlox/` directory. `--bin` asks for an executable program,
+and `--edition 2024` makes the edition explicit. `--vcs none` leaves version-control
+setup alone, so this command behaves the same whether you’re inside an existing
+Git repository or starting independently. If `rlox/` already exists, Cargo will
+refuse to create it; check that you’re starting in the intended directory rather
+than deleting existing work.
+
+Cargo creates a **package**: source files together with instructions for building
+them. The two files we’ll work with are:
+
+```text
+rlox/
+├── Cargo.toml
+└── src/
+    └── main.rs
+```
+
+Open the newly generated **`rlox/Cargo.toml`**. Its initial contents should be:
+
+```toml title="rlox/Cargo.toml · generated file"
+[package]
+name = "rlox"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+```
+
+This file is the package’s **manifest**. The `[package]` table names the package,
+gives it a version, and selects its Rust edition. The empty `[dependencies]`
+table is where external Rust libraries will go when we need them. This program
+uses only facilities supplied with Rust.
+
+The package and executable are both named `rlox` here. They’re different things:
+the package contains the source and build configuration; the executable is the
+program Cargo produces from them. Cargo recognizes `src/main.rs` as the entry
+point for a binary and uses the package name for that binary by default.
+
+## Give it something to say
+
+Cargo has put a greeting in `main.rs`. We’ll change the message so the output
+identifies the program we’re building. In **`rlox/src/main.rs`**, inside `main`,
+replace the greeting:
+
+```diff title="rlox/src/main.rs · inside main"
+ fn main() {
+-    println!("Hello, world!");
++    println!("Hello from rlox!");
+ }
+```
+
+The complete resulting file is:
+
+```rust title="rlox/src/main.rs · complete file"
+fn main() {
+    println!("Hello from rlox!");
+}
+```
+
+`fn` declares a function. For this executable, Rust begins running our code in
+`main`. The empty parentheses mean that this function takes no parameters, and
+the braces enclose its body.
+
+`println!` writes text to standard output and follows it with a newline. The
+exclamation mark identifies a macro invocation. Macros can generate Rust code
+during compilation; we can use this one without writing a macro ourselves.
+Here it receives a string literal, and the semicolon ends the statement.
+
+Save the file. In the terminal, still inside `rlox/`, run:
+
+```sh
+cargo run
+```
+
+Cargo reports its build progress, then launches the executable. The program’s
+output should be:
+
+```text title="Program output"
+Hello from rlox!
+```
+
+The build messages come from Cargo; the greeting comes from our program. To
+hide Cargo’s routine progress messages and see just the program’s output, run:
+
+```sh
+cargo run --quiet
+```
+
+Cargo still compiles changed code before running it. If you see the old
+`Hello, world!` greeting, save `rlox/src/main.rs` and try again. If the build reports
+a linker error, return to the platform setup above: having `rustc` on the path
+doesn’t by itself guarantee that the linker is installed.
+
+## From source to executable
+
+After the build, you’ll also find a `Cargo.lock` file and a `target/` directory
+inside `rlox/`. Cargo records resolved package versions in the lockfile, which
+we’ll keep with the project. Build products go into `target/`; Cargo can recreate
+them from the source, so we don’t need to keep them in version control.
+
+Create **`rlox/.gitignore`** with these complete contents to exclude those build
+products when we begin tracking the Rust project:
+
+```text title="rlox/.gitignore · new file"
+/target/
+```
+
+For this default development build, the executable is `target/debug/rlox`
+(`target/debug/rlox.exe` on Windows), relative to the `rlox/` directory. Cargo has
+compiled the Rust source into a native program for your machine. The greeting
+comes from that program; Cargo is the convenient way we’re building and launching
+it while we work.
+
+We now have a small program with an observable result. It doesn’t read Lox yet.
+The next useful behavior is to give it source text to work on, so that its output
+can tell us something about a program we supply.
