@@ -142,6 +142,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rlox-syntax"
+version = "0.1.0"
+dependencies = [
+ "rlox-text",
+]
+
+[[package]]
 name = "rlox-text"
 version = "0.1.0"
 

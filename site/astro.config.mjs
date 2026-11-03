@@ -40,6 +40,12 @@ export default defineConfig({
             { label: '4.4 · Run the checks automatically', link: '/chapter-4/4.4-ci/' },
           ],
         },
+        {
+          label: '5 · Building a Scanner by Hand',
+          items: [
+            { label: '5.1 · Read a character, emit a token', link: '/chapter-5/5.1-first-tokens/' },
+          ],
+        },
       ],
       customCss: ['./src/styles/book.css'],
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },

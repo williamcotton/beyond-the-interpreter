@@ -1,0 +1,383 @@
+---
+title: 5.1 — Read a character, emit a token
+slug: chapter-5/5.1-first-tokens
+description: Build a tiny scanner that turns individual characters into token kinds and UTF-8 byte ranges.
+prev:
+  link: /chapter-4/4.4-ci/
+  label: 4.4 · Run the checks automatically
+next: false
+---
+
+import CharacterCursor from '../../../components/CharacterCursor';
+
+<p className="book-subtitle">Chapter 5 · Building a Scanner by Hand</p>
+
+Our `source` command can display a file, but it treats the contents as one
+string. To understand a program, we need to distinguish its pieces. Consider
+just two characters:
+
+```text
+()
+```
+
+The first opens a group; the second closes it. A **scanner**, also called a
+**lexer**, turns source text into a sequence of **tokens**. Each token records
+what kind of piece we found and where it came from. For this input, we want
+`LeftParen` at `[0, 1)` and `RightParen` at `[1, 2)`.
+
+We’ll begin with four characters: `(`, `)`, `!`, and `=`. Each will produce one
+token. This is enough to learn scanning without tackling all of Lox at once.
+The scanner works on a supplied `&str`; tests will be its first caller.
+
+Start from [Section 4.4](/chapter-4/4.4-ci/). Keep your terminal in the Rust
+workspace directory we’ve been calling **`rlox/`**, containing `Cargo.toml`
+and `crates/`. File labels below include that workspace name; shell commands
+run inside it.
+
+## Give scanning a home
+
+Scanning is language behavior. It should work independently of how the source
+was read or how results will be displayed. We’ll put it in a new library,
+`rlox-syntax`, and reuse `rlox-text` for source coordinates.
+
+Create the directory:
+
+```sh
+mkdir -p crates/syntax/src
+```
+
+Add `crates/syntax` to the workspace’s `members`. The complete root manifest
+becomes:
+
+```toml title="rlox/Cargo.toml"
+[workspace]
+members = ["crates/app", "crates/text", "crates/syntax"]
+resolver = "3"
+```
+
+Create the new package manifest with this complete content:
+
+```toml title="rlox/crates/syntax/Cargo.toml"
+[package]
+name = "rlox-syntax"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rlox-text = { path = "../text" }
+```
+
+The dependency path is relative to **this package’s manifest**: from
+`crates/syntax/`, `../text` reaches its sibling. Cargo’s
+[path-dependency documentation](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-path-dependencies)
+describes this form. In Rust imports, the package’s hyphen becomes an
+underscore: `rlox_text`.
+
+## Name a token and locate it
+
+A token’s **kind** tells us which category it belongs to. Its **range** tells
+us which bytes of the source spell it. Those are different facts: two opening
+parentheses have the same kind but can occur at different positions.
+
+Create **`rlox/crates/syntax/src/lib.rs`** with this complete initial content:
+
+```rust title="rlox/crates/syntax/src/lib.rs · initial file"
+use rlox_text::{TextRange, TextSize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxKind {
+    LeftParen,
+    RightParen,
+    Bang,
+    Equal,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+```
+
+An [enum](https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html) lists
+alternatives: one `SyntaxKind` value is one of these variants. We’ve already
+used an enum for CLI commands; here its alternatives describe source pieces.
+`Token` groups a kind with the range type we built in Chapter 4. The derives
+allow us to copy these small values, compare them in tests, and read them in
+assertion failures.
+
+`Error` means a character this tiny scanner doesn’t recognize. For now, even
+a space will produce `Error`: whitespace gets its own treatment in Chapter 6.
+We’ll consume the unsupported character and keep going so it doesn’t prevent
+us from finding the next token.
+
+We keep the spelling in the original source. Given a token and that source,
+`token.range.slice(source)` can recover it without a separate owned string
+inside every token.
+
+## Walk characters, record bytes
+
+A scan needs a position that advances through the source. Rust’s
+[`char_indices`](https://doc.rust-lang.org/std/primitive.str.html#method.char_indices)
+provides an iterator of `(byte_offset, character)` pairs. Advancing it reads
+one Unicode scalar value at a time while keeping the byte offsets we need
+for `TextRange`.
+
+For `()`, the pairs are `(0, '(')` and `(1, ')')`. After reading the first
+character, we can emit its token and continue at byte `1`. Step through the
+example below: each step corresponds to one pass through the loop we’ll
+write next. The `é!` example shows why one character need not mean one byte.
+
+<CharacterCursor client:load />
+
+Each token starts at the offset supplied by the iterator. Its end is that
+start plus the character’s UTF-8 byte length. For `(` the length is one; for
+`é` it is two. The range ends **after** the character, just as in our
+half-open ranges from Chapter 4. The iterator handles the next position;
+we don’t need to maintain a second mutable byte counter.
+
+Append this function **after the `Token` definition**:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append scan"
+pub fn scan(source: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+
+    for (start, ch) in source.char_indices() {
+        let kind = match ch {
+            '(' => SyntaxKind::LeftParen,
+            ')' => SyntaxKind::RightParen,
+            '!' => SyntaxKind::Bang,
+            '=' => SyntaxKind::Equal,
+            _ => SyntaxKind::Error,
+        };
+        let end = start + ch.len_utf8();
+        let range = TextRange::new(TextSize(start), TextSize(end))
+            .expect("character end follows its start");
+
+        tokens.push(Token { kind, range });
+    }
+
+    tokens
+}
+```
+
+`Vec<Token>` is a growable collection of tokens. `Vec::new()` starts it empty;
+`mut` allows us to append with `push`. Rust infers the element type from the
+values we push and the function’s return type. The final `tokens` expression
+returns the collection. The Rust Book’s
+[vector introduction](https://doc.rust-lang.org/book/ch08-01-vectors.html)
+explains these operations.
+
+The `for` loop takes the iterator’s pairs in order. `(start, ch)` destructures
+each pair into two local variables. Single quotes mark a Rust character
+literal such as `'('`; double quotes would describe a string.
+
+The [`match`](https://doc.rust-lang.org/book/ch06-02-match.html) expression
+chooses a kind. Each arm has a pattern on the left of `=>` and a result on
+the right. The `_` pattern matches any remaining character. Even this fallback
+has consumed one whole character, so the next iteration can continue.
+
+[`len_utf8`](https://doc.rust-lang.org/std/primitive.char.html#method.len_utf8)
+gives that character’s encoded byte length. Adding it to the character’s
+start gives an ordered range within this source, so the `expect` documents
+an invariant of our calculation. It doesn’t reject the user’s character:
+unsupported characters produce `Error` tokens through the match above.
+
+When there are no more characters, the loop ends. Empty input therefore
+returns an empty vector. We won’t add a separate end-of-input token here.
+
+## Check kinds and source locations together
+
+The opening example needs both correct categories and correct ranges. Append
+this test module **after `scan`**:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append tests"
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextRange, TextSize};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()!=");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source);
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(tokens[0].range.slice(source), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(tokens[1].range.slice(source), Some("!"));
+    }
+}
+```
+
+The `vec!` macro constructs our expected collection. Comparing the vectors
+checks their lengths and each token in order. In this test, `unwrap()` takes
+the range from `Some`: the literal endpoints are visibly ordered, and a
+`None` would fail the test. Unlike scanner input, these values are fixed
+expectations under our control.
+
+The last test checks a different risk. The `é` must occupy a complete valid
+slice, and the `!` after it must still be found. Advancing a byte at a time
+or using `start + 1` for every token would fail this example.
+
+Run the syntax library’s tests from the workspace root:
+
+```sh
+cargo test -p rlox-syntax
+```
+
+The named tests should report `ok`. Cargo also records the new local
+`rlox-syntax` package and its `rlox-text` dependency in the shared
+**`rlox/Cargo.lock`**; let Cargo update that file rather than editing it by
+hand. The path dependency doesn’t introduce a registry package.
+
+Finish by checking the whole workspace:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+The new scanner is usable through its library API, and the existing app/text
+checks should still pass. The `source` command continues to display source;
+we’ll give token inspection a command of its own later.
+
+<details>
+<summary>Complete resulting syntax library</summary>
+
+```rust title="rlox/crates/syntax/src/lib.rs · complete resulting file"
+use rlox_text::{TextRange, TextSize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxKind {
+    LeftParen,
+    RightParen,
+    Bang,
+    Equal,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+
+pub fn scan(source: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+
+    for (start, ch) in source.char_indices() {
+        let kind = match ch {
+            '(' => SyntaxKind::LeftParen,
+            ')' => SyntaxKind::RightParen,
+            '!' => SyntaxKind::Bang,
+            '=' => SyntaxKind::Equal,
+            _ => SyntaxKind::Error,
+        };
+        let end = start + ch.len_utf8();
+        let range = TextRange::new(TextSize(start), TextSize(end))
+            .expect("character end follows its start");
+
+        tokens.push(Token { kind, range });
+    }
+
+    tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextRange, TextSize};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()!=");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source);
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(tokens[0].range.slice(source), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(tokens[1].range.slice(source), Some("!"));
+    }
+}
+```
+
+</details>
+
+We can now name individual characters and find their spelling in the source.
+But `!=` is one Lox operator, and our scanner currently returns `Bang` followed
+by `Equal`. The next step is to inspect the following character before
+committing to a token kind.
+
+For the broader role of tokens and lexemes, read
+[Crafting Interpreters, “Lexemes and Tokens”](https://craftinginterpreters.com/scanning.html#lexemes-and-tokens).
+Our scanner will stay small while we learn the mechanics, before handing
+those mechanics to Logos.

@@ -82,3 +82,8 @@ stop the development server first to reuse port 4321.
 `package-lock.json` records exact dependency resolutions. Use `npm ci` to
 reproduce them; `.astro/`, `dist/`, and `node_modules/` are generated locally.
 No hosting account or deployment configuration is required.
+
+Section 5.1 is drafted at `src/content/docs/chapter-5/5.1-first-tokens.mdx`,
+served at `/chapter-5/5.1-first-tokens/`. Its React character-cursor visual
+uses two authored examples verified against the matching Rust scanner.
+The section, cursor visual, and matching Rust implementation are accepted.
