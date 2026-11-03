@@ -21,9 +21,18 @@ impl TextRange {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyntaxOrigin {
+    pub file: FileId,
+    pub range: TextRange,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{TextRange, TextSize};
+    use super::{FileId, SyntaxOrigin, TextRange, TextSize};
 
     #[test]
     fn selects_ascii_fragment() {
@@ -58,5 +67,39 @@ mod tests {
         assert_eq!(eof.slice(source), Some(""));
         assert_eq!(beyond.slice(source), None);
         assert_eq!(interior.slice(source), None);
+    }
+
+    #[test]
+    fn same_range_in_different_files_has_different_origins() {
+        let range = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+        let first = SyntaxOrigin {
+            file: FileId(0),
+            range,
+        };
+        let second = SyntaxOrigin {
+            file: FileId(1),
+            range,
+        };
+
+        assert_eq!(first.range, second.range);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn selects_text_from_identified_source() {
+        let first_source = "print 42;";
+        let second_source = "while (true) {}";
+        let origin = SyntaxOrigin {
+            file: FileId(1),
+            range: TextRange::new(TextSize(0), TextSize(5)).expect("ordered range"),
+        };
+
+        let source = match origin.file {
+            FileId(0) => first_source,
+            FileId(1) => second_source,
+            _ => panic!("file ID was not assigned in this example"),
+        };
+
+        assert_eq!(origin.range.slice(source), Some("while"));
     }
 }

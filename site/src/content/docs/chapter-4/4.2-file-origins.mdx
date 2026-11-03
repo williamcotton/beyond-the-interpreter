@@ -1,0 +1,305 @@
+---
+title: 4.2 — Identify the source file
+slug: chapter-4/4.2-file-origins
+description: Pair a byte range with a file identity so a source location identifies more than offsets.
+prev:
+  link: /chapter-4/4.1-byte-ranges/
+  label: 4.1 · Locate text with byte ranges
+next: false
+---
+
+<p className="book-subtitle">Chapter 4 · Source Locations, Workspaces, and CI</p>
+
+A range tells us where to look inside a source string. It doesn’t tell us
+which string to use. Consider two source files:
+
+```text title="First source"
+print 42;
+```
+
+```text title="Second source"
+while (true) {}
+```
+
+The range `[0, 5)` selects `print` in the first file and `while` in the second.
+The coordinates are the same, but the locations are different. We need to
+carry the file’s identity alongside its range.
+
+Start from [Section 4.1](/chapter-4/4.1-byte-ranges/), keeping the terminal in
+**`rlox/`**. We’ll use these two texts as string literals in tests; there are
+no new source files to create for this example.
+
+## Name a file within a set of sources
+
+We’ll represent a file’s identity with `FileId`, another small tuple struct.
+Its integer is a label assigned by the code that owns a set of sources.
+For our example, we’ll assign `FileId(0)` to the first text and `FileId(1)`
+to the second.
+
+An ID gives us a compact way to refer to a source without copying a filename
+or its contents each time. Its meaning comes from that assignment: the
+number `0` isn’t a filesystem path or a globally unique name. Constructing
+`FileId(0)` doesn’t open a file or establish that one exists.
+
+`SyntaxOrigin` will pair a `FileId` with a `TextRange`. It records where a
+piece of syntax comes from; we can already demonstrate the location using
+the words in our source examples.
+
+In **`rlox/src/lib.rs`**, insert these definitions **after `impl TextRange`
+and before the `#[cfg(test)]` module**:
+
+```rust title="rlox/src/lib.rs · add before the test module"
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyntaxOrigin {
+    pub file: FileId,
+    pub range: TextRange,
+}
+```
+
+The types use the same standard derives as our coordinates. Equality for
+`SyntaxOrigin` compares both fields, so a different file ID makes a different
+origin even when its range is unchanged. `Copy` lets us pass these small
+locations around without moving the source text they describe.
+
+The fields are public so callers can construct an origin and inspect either
+part. Its range still comes from `TextRange::new`; making the `range` field
+public does not expose the private endpoints inside `TextRange`. The Rust
+Book’s [struct discussion](https://doc.rust-lang.org/book/ch05-01-defining-structs.html)
+explains constructing values with named fields.
+
+## Check that the file contributes to identity
+
+We’ll keep all the existing range tests. Expand their import so the new
+types are available **inside `mod tests`**:
+
+```diff title="rlox/src/lib.rs · test import"
+ mod tests {
+-    use super::{TextRange, TextSize};
++    use super::{FileId, SyntaxOrigin, TextRange, TextSize};
+```
+
+Then append this test **inside `mod tests`, after the existing tests and
+before the module’s closing brace**:
+
+```rust title="rlox/src/lib.rs · origin identity test"
+#[test]
+fn same_range_in_different_files_has_different_origins() {
+    let range = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+    let first = SyntaxOrigin {
+        file: FileId(0),
+        range,
+    };
+    let second = SyntaxOrigin {
+        file: FileId(1),
+        range,
+    };
+
+    assert_eq!(first.range, second.range);
+    assert_ne!(first, second);
+}
+```
+
+The field shorthand `range` uses our existing binding for that field, just
+as the range constructor used `Self { start, end }`. Because `TextRange` is
+`Copy`, we can reuse the range in both origins.
+
+[`assert_ne!`](https://doc.rust-lang.org/std/macro.assert_ne.html) requires its
+two values to be unequal. Together the assertions state our rule: the offsets
+match, but the complete locations don’t. Removing the file from an origin’s
+equality would lose a distinction the rest of the tool needs.
+
+Run:
+
+```sh
+cargo test --lib
+```
+
+The new test and the existing range tests should report `ok`.
+
+## Use the identity to choose the source
+
+The origin records an association; the owner of the sources must still
+resolve it. We can make that step visible with the two string literals from
+our opening example.
+
+We’ll select the origin in file `1`, then match its ID to the corresponding
+text. The patterns `FileId(0)` and `FileId(1)` inspect the integer inside our
+tuple struct. The wildcard covers any number we didn’t assign in this
+example. The Rust Book’s
+[pattern discussion](https://doc.rust-lang.org/book/ch19-03-pattern-syntax.html)
+covers matching values and destructuring data.
+
+Add this test **inside `mod tests`, after the origin identity test**:
+
+```rust title="rlox/src/lib.rs · source selection test"
+#[test]
+fn selects_text_from_identified_source() {
+    let first_source = "print 42;";
+    let second_source = "while (true) {}";
+    let origin = SyntaxOrigin {
+        file: FileId(1),
+        range: TextRange::new(TextSize(0), TextSize(5)).expect("ordered range"),
+    };
+
+    let source = match origin.file {
+        FileId(0) => first_source,
+        FileId(1) => second_source,
+        _ => panic!("file ID was not assigned in this example"),
+    };
+
+    assert_eq!(origin.range.slice(source), Some("while"));
+}
+```
+
+`panic!` stops the test if its setup tries to use an unassigned ID. With our
+assigned `FileId(1)`, the match chooses `second_source`, and the range selects
+`while`. This test makes the lookup explicit rather than silently supplying
+a string unrelated to the origin.
+
+The mapping is part of this example’s setup. `SyntaxOrigin` itself doesn’t
+store the text or perform lookup, and `TextRange::slice` still checks only
+the source string it receives. If a caller supplies the wrong source,
+bounds and UTF-8 validation alone cannot detect that mistake. The file ID
+gives the caller the information needed to choose correctly.
+
+Run the library tests again:
+
+```sh
+cargo test --lib
+```
+
+All named tests should report `ok`. We’ve added file identity without
+changing the range constructor or its slicing rules. Then check the whole
+package and the existing CLI:
+
+```sh
+cargo test
+cargo run --quiet -- source hello.lox
+```
+
+Both test targets should pass, and the command should still display
+`print "Hello, Lox!";` followed by the file’s newline.
+
+<details>
+<summary>Complete rlox/src/lib.rs</summary>
+
+```rust title="rlox/src/lib.rs · complete file"
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextSize(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextRange {
+    start: TextSize,
+    end: TextSize,
+}
+
+impl TextRange {
+    pub fn new(start: TextSize, end: TextSize) -> Option<Self> {
+        if start.0 > end.0 {
+            return None;
+        }
+
+        Some(Self { start, end })
+    }
+
+    pub fn slice(self, source: &str) -> Option<&str> {
+        source.get(self.start.0..self.end.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyntaxOrigin {
+    pub file: FileId,
+    pub range: TextRange,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FileId, SyntaxOrigin, TextRange, TextSize};
+
+    #[test]
+    fn selects_ascii_fragment() {
+        let word = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+
+        assert_eq!(word.slice("print 42;"), Some("print"));
+    }
+
+    #[test]
+    fn rejects_reversed_range() {
+        assert_eq!(TextRange::new(TextSize(5), TextSize(0)), None);
+    }
+
+    #[test]
+    fn respects_utf8_boundaries() {
+        let source = "aé!";
+        let accent = TextRange::new(TextSize(1), TextSize(3)).expect("ordered range");
+        let split = TextRange::new(TextSize(1), TextSize(2)).expect("ordered range");
+
+        assert_eq!(accent.slice(source), Some("é"));
+        assert_eq!(split.slice(source), None);
+    }
+
+    #[test]
+    fn checks_bounds_and_empty_ranges() {
+        let source = "aé!";
+        let end = TextSize(source.len());
+        let eof = TextRange::new(end, end).expect("ordered range");
+        let beyond = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+        let interior = TextRange::new(TextSize(2), TextSize(2)).expect("ordered range");
+
+        assert_eq!(eof.slice(source), Some(""));
+        assert_eq!(beyond.slice(source), None);
+        assert_eq!(interior.slice(source), None);
+    }
+
+    #[test]
+    fn same_range_in_different_files_has_different_origins() {
+        let range = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+        let first = SyntaxOrigin {
+            file: FileId(0),
+            range,
+        };
+        let second = SyntaxOrigin {
+            file: FileId(1),
+            range,
+        };
+
+        assert_eq!(first.range, second.range);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn selects_text_from_identified_source() {
+        let first_source = "print 42;";
+        let second_source = "while (true) {}";
+        let origin = SyntaxOrigin {
+            file: FileId(1),
+            range: TextRange::new(TextSize(0), TextSize(5)).expect("ordered range"),
+        };
+
+        let source = match origin.file {
+            FileId(0) => first_source,
+            FileId(1) => second_source,
+            _ => panic!("file ID was not assigned in this example"),
+        };
+
+        assert_eq!(origin.range.slice(source), Some("while"));
+    }
+}
+```
+
+</details>
+
+*Crafting Interpreters* records token line numbers and discusses source offsets
+in [“Location information”](https://craftinginterpreters.com/scanning.html#location-information).
+Our file identity makes a byte range distinguishable across sources as well.
+
+A source location now has two parts: which file and which bytes within it.
+The CLI and the source-coordinate API still live in one package. Next we’ll
+move that working code into the app and text packages of a Cargo workspace.
