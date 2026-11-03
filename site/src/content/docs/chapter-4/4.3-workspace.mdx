@@ -1,0 +1,451 @@
+---
+title: 4.3 — Extract the workspace
+slug: chapter-4/4.3-workspace
+description: Move the working CLI and source-coordinate library into separate packages while preserving their behavior.
+prev:
+  link: /chapter-4/4.2-file-origins/
+  label: 4.2 · Identify the source file
+next: false
+---
+
+<p className="book-subtitle">Chapter 4 · Source Locations, Workspaces, and CI</p>
+
+Our package now contains two distinct pieces of code. The CLI parses commands,
+reads files, and prints results. The library describes source locations
+without knowing how a command was invoked. We can test them separately, but
+the package still assigns both the same dependencies—including Clap.
+
+We’ll make that boundary explicit with a **Cargo workspace**. The existing
+CLI will become the `rlox-app` package; the coordinate library will become
+`rlox-text`. The executable will still be called `rlox`.
+
+Start from [Section 4.2](/chapter-4/4.2-file-origins/). Keep the terminal in
+**`rlox/`**, beside its `Cargo.toml`, `Cargo.lock`, and `hello.lox`.
+First check the current endpoint:
+
+```sh
+cargo test
+cargo run --quiet -- source hello.lox
+```
+
+Both test targets should pass, and the command should print
+`print "Hello, Lox!";` followed by the file’s newline. Those are the behaviors
+we’ll preserve during the move.
+
+## Move the working source files
+
+A [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html)
+groups packages under one root manifest and lockfile. It lets us build and
+test them together while each package declares its own targets and dependencies.
+
+Our new layout will be:
+
+```text title="Resulting Rust project layout"
+rlox/
+  Cargo.toml
+  Cargo.lock
+  .gitignore
+  hello.lox
+  crates/
+    app/
+      Cargo.toml
+      src/
+        main.rs
+    text/
+      Cargo.toml
+      src/
+        lib.rs
+```
+
+The files under `src/` move; their contents stay unchanged. From **`rlox/`**,
+use these macOS/Linux shell commands, or make the same moves in your editor:
+
+```sh
+mkdir -p crates/app/src crates/text/src
+mv src/main.rs crates/app/src/main.rs
+mv src/lib.rs crates/text/src/lib.rs
+rmdir src
+```
+
+`rmdir` removes the now-empty old directory. Keep `hello.lox`, `Cargo.lock`,
+and `.gitignore` at the root. The generated `target/` directory also stays
+there and remains covered by the existing `/target/` ignore rule.
+
+**Finish the following three manifest edits before running Cargo again.**
+The old manifest no longer describes where our source files live; this is
+one grouped layout change.
+
+## Describe the two packages
+
+Create **`rlox/crates/app/Cargo.toml`** with this complete content:
+
+```toml title="rlox/crates/app/Cargo.toml · complete file"
+[package]
+name = "rlox-app"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "rlox"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "=4.6.7", features = ["derive"] }
+```
+
+The package name identifies the member to Cargo. The `[[bin]]` table separately
+names its executable and locates its entry point, relative to this manifest.
+Without that explicit name, a `src/main.rs` binary normally takes its package’s
+name. We want the package `rlox-app` to keep producing the command `rlox`.
+Cargo’s [binary-target documentation](https://doc.rust-lang.org/cargo/reference/cargo-targets.html#binaries)
+explains these settings.
+
+Clap’s declaration moves here unchanged. Parsing belongs to the app, so the
+text package won’t need that dependency.
+
+Create **`rlox/crates/text/Cargo.toml`** with this complete content:
+
+```toml title="rlox/crates/text/Cargo.toml · complete file"
+[package]
+name = "rlox-text"
+version = "0.1.0"
+edition = "2024"
+```
+
+Cargo discovers its library through `src/lib.rs`, just as before. The library’s
+Rust crate name is `rlox_text`: hyphens in a package’s name become underscores
+in the default library name. Its public types now belong to that library.
+The code inside it, including tests using `super`, needs no import edits.
+
+There is no dependency declaration in the text package because its coordinate
+code uses only the standard library. Workspace membership also doesn’t make
+one member a dependency of another. The current app displays whole files and
+doesn’t call the coordinate API, so we won’t add an unused app-to-text dependency.
+When code needs another package, its manifest must declare that relationship.
+
+## Turn the root into a workspace
+
+Replace **`rlox/Cargo.toml`** with this complete content:
+
+```toml title="rlox/Cargo.toml · complete file"
+[workspace]
+members = ["crates/app", "crates/text"]
+resolver = "3"
+```
+
+The root now lists members instead of defining a package. Cargo calls this a
+**virtual manifest**. Each member carries its own name, edition, and dependencies.
+`resolver = "3"` explicitly chooses the dependency-resolution mode associated
+with edition 2024; there is no root package edition for Cargo to infer it from.
+The [resolver reference](https://doc.rust-lang.org/cargo/reference/resolver.html#resolver-versions)
+describes the available modes.
+
+We haven’t restricted `default-members`, so commands using the virtual root’s
+default package selection include the workspace members. We’ll use explicit
+package selection when focusing on one member and `--workspace` when we want
+to make the whole-workspace intent clear.
+
+With all source moves and manifest edits saved, run from **`rlox/`**:
+
+```sh
+cargo check --workspace
+```
+
+It should check both packages successfully. Cargo will update the existing
+root `Cargo.lock`: our local packages are now `rlox-app` and `rlox-text` instead
+of `rlox`. The registry dependencies remain locked by that shared file. Keep
+it in place rather than deleting it or creating separate member lockfiles;
+Cargo manages the changed local-package entries.
+
+The workspace also shares the root `target/` directory. Old cached artifacts
+may still be present there; Cargo decides which artifacts correspond to the
+current packages and sources.
+
+## Keep running the same executable
+
+From the workspace root, run the same command:
+
+```sh
+cargo run --quiet -- source hello.lox
+```
+
+It should still print the Lox source with no other program output. There is
+one binary target across these members, so Cargo can select it. We can also
+name both the package and target explicitly:
+
+```sh
+cargo run -p rlox-app --bin rlox --quiet -- source hello.lox
+```
+
+The output should be identical. `-p rlox-app` selects the package; `--bin rlox`
+selects its executable target. Everything after `--` still goes to our CLI.
+The [cargo run reference](https://doc.rust-lang.org/cargo/commands/cargo-run.html)
+covers those selections and its working-directory behavior.
+
+The path `hello.lox` is still relative to the terminal’s current directory.
+Selecting a package doesn’t change that directory. Keeping the terminal in
+`rlox/` is why neither moving `main.rs` nor adding `-p` requires changing our
+source-file argument.
+
+Check the generated help too:
+
+```sh
+cargo run --quiet -- --help
+```
+
+It should succeed on stdout, still identifying the executable as `rlox`:
+
+```text title="Help output · usage line"
+Usage: rlox <COMMAND>
+```
+
+## Select one package or the whole workspace
+
+Run the coordinate tests on their own:
+
+```sh
+cargo test -p rlox-text --lib
+```
+
+The range and file-origin tests should report `ok`. Now select the app:
+
+```sh
+cargo test -p rlox-app
+```
+
+Its command-interface tests should also pass. Each package contains the same
+tests as before; they moved with the source files.
+
+Then check all members together:
+
+```sh
+cargo test --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+The tests should pass, formatting should require no changes, and Clippy should
+finish without warnings. `--workspace` selects members; Clippy’s `--all-targets`
+also includes test targets. In the formatting command, `--all` selects workspace
+packages, and the `--` passes `--check` to rustfmt so it reports formatting
+changes rather than applying them.
+
+Finally, check the read-error path through the moved app. Assuming
+`missing.lox` is absent from the workspace root, run this **intentional failure**:
+
+```sh
+cargo run --quiet -- source missing.lox
+```
+
+It should leave stdout empty, write the existing diagnostic beginning
+`rlox: could not read 'missing.lox':` to stderr, and exit unsuccessfully.
+Recover with:
+
+```sh
+cargo run --quiet -- source hello.lox
+```
+
+The successful source output should be unchanged.
+
+<details>
+<summary>Complete rlox/crates/app/src/main.rs · moved unchanged</summary>
+
+```rust title="rlox/crates/app/src/main.rs · complete file"
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "rlox", about = "Inspect Lox source files")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Display a file's source text.
+    Source {
+        /// File whose text should be displayed.
+        file: String,
+    },
+}
+
+fn main() -> ExitCode {
+    let filename = match Cli::parse().command {
+        Command::Source { file } => file,
+    };
+    let source = match std::fs::read_to_string(&filename) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("rlox: could not read '{filename}': {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    print!("{source}");
+    ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn accepts_source_command() {
+        let cli = Cli::try_parse_from(["rlox", "source", "hello.lox"])
+            .expect("source with a filename should parse");
+
+        match cli.command {
+            Command::Source { file } => assert_eq!(file, "hello.lox"),
+        }
+    }
+
+    #[test]
+    fn requires_known_command() {
+        assert!(Cli::try_parse_from(["rlox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "hello.lox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "unknown", "hello.lox"]).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_filename() {
+        assert!(Cli::try_parse_from(["rlox", "source"]).is_err());
+    }
+
+    #[test]
+    fn rejects_extra_filenames() {
+        assert!(Cli::try_parse_from(["rlox", "source", "hello.lox", "other.lox"]).is_err());
+    }
+
+    #[test]
+    fn help_is_a_successful_request() {
+        let help = Cli::try_parse_from(["rlox", "--help"])
+            .err()
+            .expect("help should stop parsing");
+
+        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+        assert_eq!(help.exit_code(), 0);
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete rlox/crates/text/src/lib.rs · moved unchanged</summary>
+
+```rust title="rlox/crates/text/src/lib.rs · complete file"
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextSize(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextRange {
+    start: TextSize,
+    end: TextSize,
+}
+
+impl TextRange {
+    pub fn new(start: TextSize, end: TextSize) -> Option<Self> {
+        if start.0 > end.0 {
+            return None;
+        }
+
+        Some(Self { start, end })
+    }
+
+    pub fn slice(self, source: &str) -> Option<&str> {
+        source.get(self.start.0..self.end.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyntaxOrigin {
+    pub file: FileId,
+    pub range: TextRange,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FileId, SyntaxOrigin, TextRange, TextSize};
+
+    #[test]
+    fn selects_ascii_fragment() {
+        let word = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+
+        assert_eq!(word.slice("print 42;"), Some("print"));
+    }
+
+    #[test]
+    fn rejects_reversed_range() {
+        assert_eq!(TextRange::new(TextSize(5), TextSize(0)), None);
+    }
+
+    #[test]
+    fn respects_utf8_boundaries() {
+        let source = "aé!";
+        let accent = TextRange::new(TextSize(1), TextSize(3)).expect("ordered range");
+        let split = TextRange::new(TextSize(1), TextSize(2)).expect("ordered range");
+
+        assert_eq!(accent.slice(source), Some("é"));
+        assert_eq!(split.slice(source), None);
+    }
+
+    #[test]
+    fn checks_bounds_and_empty_ranges() {
+        let source = "aé!";
+        let end = TextSize(source.len());
+        let eof = TextRange::new(end, end).expect("ordered range");
+        let beyond = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+        let interior = TextRange::new(TextSize(2), TextSize(2)).expect("ordered range");
+
+        assert_eq!(eof.slice(source), Some(""));
+        assert_eq!(beyond.slice(source), None);
+        assert_eq!(interior.slice(source), None);
+    }
+
+    #[test]
+    fn same_range_in_different_files_has_different_origins() {
+        let range = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+        let first = SyntaxOrigin {
+            file: FileId(0),
+            range,
+        };
+        let second = SyntaxOrigin {
+            file: FileId(1),
+            range,
+        };
+
+        assert_eq!(first.range, second.range);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn selects_text_from_identified_source() {
+        let first_source = "print 42;";
+        let second_source = "while (true) {}";
+        let origin = SyntaxOrigin {
+            file: FileId(1),
+            range: TextRange::new(TextSize(0), TextSize(5)).expect("ordered range"),
+        };
+
+        let source = match origin.file {
+            FileId(0) => first_source,
+            FileId(1) => second_source,
+            _ => panic!("file ID was not assigned in this example"),
+        };
+
+        assert_eq!(origin.range.slice(source), Some("while"));
+    }
+}
+```
+
+</details>
+
+The source code and its behavior stayed the same, while each responsibility
+now has its own package and dependency list. The workspace gives us one
+place to run the checks across both. Next, we’ll arrange for those same
+checks to run in CI.

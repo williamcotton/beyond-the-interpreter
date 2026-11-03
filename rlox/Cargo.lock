@@ -135,11 +135,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "rlox"
+name = "rlox-app"
 version = "0.1.0"
 dependencies = [
  "clap",
 ]
+
+[[package]]
+name = "rlox-text"
+version = "0.1.0"
 
 [[package]]
 name = "strsim"

@@ -36,6 +36,7 @@ export default defineConfig({
           items: [
             { label: '4.1 · Locate text with byte ranges', link: '/chapter-4/4.1-byte-ranges/' },
             { label: '4.2 · Identify the source file', link: '/chapter-4/4.2-file-origins/' },
+            { label: '4.3 · Extract the workspace', link: '/chapter-4/4.3-workspace/' },
           ],
         },
       ],

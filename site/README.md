@@ -38,8 +38,11 @@ is at `src/content/docs/chapter-4/4.1-byte-ranges.mdx`, served at
 are verified and accepted. Section 4.2 is at
 `src/content/docs/chapter-4/4.2-file-origins.mdx`, served at
 `/chapter-4/4.2-file-origins/`. Its text is approved and matching file-origin
-types/tests are verified and accepted.
-The CLI remains unchanged.
+types/tests are verified and accepted. Section 4.3 is at
+`src/content/docs/chapter-4/4.3-workspace.mdx`, served at
+`/chapter-4/4.3-workspace/`. Its text is approved and matching workspace
+migration is verified and accepted. rlox now contains app/text
+workspace packages with unchanged source and CLI behavior.
 
 Astro and Starlight provide the publication; Starlight includes MDX support.
 The React integration and strict TypeScript configuration support future
