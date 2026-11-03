@@ -1,0 +1,559 @@
+---
+title: 6.2 — Keep the spaces
+slug: chapter-6/6.2-whitespace
+description: Retain whitespace tokens and check that token ranges preserve every byte of the original source.
+prev:
+  link: /chapter-6/6.1-identifiers/
+  label: 6.1 · Let a name grow
+next: false
+---
+
+<p className="book-subtitle">Chapter 6 · Tokens That Grow</p>
+
+We can scan `a!=b`, but putting a space between the name and the operator
+produces an `Error` token. A space isn’t an error in Lox. We need to recognize
+whitespace without losing the text it occupies.
+
+A parser will usually care about the names and operators rather than the
+spaces between them. An editor or a tool that reconstructs source still
+needs those spaces. We’ll call this text **trivia**: source that doesn’t carry
+a grammatical operation of its own. Our scanner will retain it as tokens;
+later consumers can decide when to ignore it.
+
+Start from [Section 6.1](/chapter-6/6.1-identifiers/), with your terminal in
+**`rlox/`**. All edits belong to **`rlox/crates/syntax/src/lib.rs`**. We’ll add
+one token kind and group whitespace using the same growing-range mechanism
+as identifiers.
+
+## Make the invisible text visible
+
+We’ll recognize four whitespace characters: space, tab (`\t`), carriage return
+(`\r`), and line feed (`\n`). A consecutive run becomes one `Whitespace`
+token, even if it mixes those characters.
+
+Consider the source represented by this Rust string literal:
+
+```rust title="A source string for the scanner"
+"a \t\r\n!= b"
+```
+
+The escapes make otherwise invisible characters visible. `\t`, `\r`, and
+`\n` each describe one byte here. After `a`, there are four whitespace bytes:
+a space, a tab, a carriage return, and a line feed. This gives us:
+
+```text title="Token ranges and their original spelling"
+Identifier  [0, 1)  "a"
+Whitespace  [1, 5)  " \t\r\n"
+BangEqual   [5, 7)  "!="
+Whitespace  [7, 8)  " "
+Identifier  [8, 9)  "b"
+```
+
+Every range ends where the next begins. Joining their original spellings
+reproduces the source, including the tab and line ending. This is why we’ll
+emit a whitespace token instead of skipping ahead without recording one.
+
+## Grow a whitespace token
+
+Add `Whitespace` after `Identifier` in `SyntaxKind`:
+
+```diff title="rlox/crates/syntax/src/lib.rs · SyntaxKind"
+     Identifier,
++    Whitespace,
+     Error,
+```
+
+In `scan`, the outer loop already consumes the first character and gives
+us an initial range. Insert this arm **inside `match ch`, immediately before
+the identifier arm** beginning `ch if ch.is_ascii_alphabetic()`:
+
+```rust title="rlox/crates/syntax/src/lib.rs · add whitespace arm"
+' ' | '\t' | '\r' | '\n' => {
+    while let Some((offset, next)) =
+        chars.next_if(|&(_, next)| matches!(next, ' ' | '\t' | '\r' | '\n'))
+    {
+        end = offset + next.len_utf8();
+    }
+    SyntaxKind::Whitespace
+}
+```
+
+The `|` symbols join
+[alternative patterns](https://doc.rust-lang.org/book/ch19-03-pattern-syntax.html#multiple-patterns):
+this arm handles any one of the four characters. Inside the predicate,
+[`matches!`](https://doc.rust-lang.org/std/macro.matches.html) returns a
+Boolean saying whether `next` matches that same set of alternatives. We use
+the identical set for starting and continuing a whitespace run.
+
+The inner loop works just like the identifier loop: consume an accepted
+character, extend `end`, and try again. The first non-whitespace character
+remains available to the outer loop. When the run reaches EOF, the last
+successful update already gives us its end. Returning `Whitespace` lets the
+existing code construct and push a token containing the whole run.
+
+No branch skips text or prints a message. Characters outside our supported
+rules still reach the existing `Error` fallback, which consumes one complete
+Unicode scalar value and keeps scanning.
+
+## Check classification before coverage
+
+A scanner could cover the entire source while assigning every token the
+wrong kind. First, check the exact result from our opening example. Append
+this test **inside the existing `mod tests`, before its closing brace**;
+keep its imports and earlier tests:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append inside mod tests"
+#[test]
+fn keeps_whitespace_between_tokens() {
+    assert_eq!(
+        scan("a \t\r\n!= b"),
+        vec![
+            Token {
+                kind: SyntaxKind::Identifier,
+                range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Whitespace,
+                range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::BangEqual,
+                range: TextRange::new(TextSize(5), TextSize(7)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Whitespace,
+                range: TextRange::new(TextSize(7), TextSize(8)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Identifier,
+                range: TextRange::new(TextSize(8), TextSize(9)).unwrap(),
+            },
+        ]
+    );
+}
+```
+
+This checks grouping as well as preservation. Four whitespace characters
+become one token, and scanning resumes at `!=`. The later single space also
+gets its own token.
+
+Our whitespace set is explicit. Vertical tab, form feed, and nonbreaking
+space remain unsupported characters here. Add another test **inside the
+same test module**:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append inside mod tests"
+#[test]
+fn whitespace_uses_the_lox_character_set() {
+    for source in ["\u{000b}", "\u{000c}", "\u{00a0}"] {
+        assert_eq!(
+            scan(source),
+            vec![Token {
+                kind: SyntaxKind::Error,
+                range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+            }]
+        );
+    }
+}
+```
+
+Rust’s `\u{...}` escape spells a Unicode scalar by its hexadecimal value.
+These three inputs each contain one character; the nonbreaking space uses
+two UTF-8 bytes. The expected range covers that whole character, even when
+it isn’t recognized as whitespace.
+
+## Check that no source bytes disappear
+
+The scanner already kept unsupported characters as `Error` tokens. We want
+to preserve that property as more kinds of text become recognizable:
+**token ranges must partition the entire source without gaps or overlaps**.
+
+We can check it through our existing `TextRange` API. Start at byte `0`.
+For each token, get its source slice and require a nonempty piece. Its range
+must start at our running position and end after exactly that piece’s byte
+length. Advance to that end and continue. After the last token, the position
+must equal the source length.
+
+That checks positions. We’ll also accumulate the pieces into a `String`
+and compare it with the original source, making source reconstruction an
+explicit observation. Append this test **inside the same test module**:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append inside mod tests"
+#[test]
+fn token_ranges_cover_the_original_source() {
+    for source in [
+        "",
+        " \t\r\n",
+        "a \t\r\n!= b",
+        "a_2!=other",
+        "2aé_b",
+        "a\u{00a0}b",
+    ] {
+        let mut offset = 0;
+        let mut reconstructed = String::new();
+
+        for token in scan(source) {
+            let text = token.range.slice(source).expect("valid UTF-8 source slice");
+            assert!(!text.is_empty());
+            let end = offset + text.len();
+            let expected = TextRange::new(TextSize(offset), TextSize(end)).unwrap();
+            assert_eq!(token.range, expected);
+
+            reconstructed.push_str(text);
+            offset = end;
+        }
+
+        assert_eq!(offset, source.len());
+        assert_eq!(reconstructed, source);
+    }
+}
+```
+
+`String::new()` starts an empty owned string.
+[`push_str`](https://doc.rust-lang.org/std/string/struct.String.html#method.push_str)
+appends each borrowed source slice to it. `text.len()` measures bytes, so our
+running position uses the same unit as `TextSize`. Comparing `token.range`
+with a newly constructed expected range checks adjacency without exposing
+its private endpoints.
+
+A gap or overlap fails the range comparison. A missing tail fails the final
+length check; an extra empty token fails the nonempty check. The string
+comparison then confirms that concatenating the selected pieces gives the
+original bytes. Empty input takes no inner-loop steps and reconstructs an
+empty string. The whitespace-only input checks a run that reaches EOF, while
+the other examples combine recognized tokens and multibyte error input.
+
+Keep both kinds of checks: explicit expected kinds and ranges for particular
+inputs, and the general coverage rule over a small collection of examples.
+Neither replaces the other.
+
+Run the syntax tests, then check the whole workspace:
+
+```sh
+cargo test -p rlox-syntax
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+The named tests should report `ok`, and formatting and Clippy should finish
+successfully. No new imports, manifests, dependencies, or coordinate methods
+are needed. `Cargo.lock` and the CLI stay unchanged.
+
+<details>
+<summary>Complete resulting syntax library</summary>
+
+```rust title="rlox/crates/syntax/src/lib.rs · complete resulting file"
+use rlox_text::{TextRange, TextSize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxKind {
+    LeftParen,
+    RightParen,
+    Bang,
+    BangEqual,
+    Equal,
+    EqualEqual,
+    Identifier,
+    Whitespace,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+
+pub fn scan(source: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+    let mut chars = source.char_indices().peekable();
+
+    while let Some((start, ch)) = chars.next() {
+        let mut end = start + ch.len_utf8();
+        let kind = match ch {
+            '(' => SyntaxKind::LeftParen,
+            ')' => SyntaxKind::RightParen,
+            '!' => {
+                if chars.next_if(|&(_, next)| next == '=').is_some() {
+                    end += 1;
+                    SyntaxKind::BangEqual
+                } else {
+                    SyntaxKind::Bang
+                }
+            }
+            '=' => {
+                if chars.next_if(|&(_, next)| next == '=').is_some() {
+                    end += 1;
+                    SyntaxKind::EqualEqual
+                } else {
+                    SyntaxKind::Equal
+                }
+            }
+            ' ' | '\t' | '\r' | '\n' => {
+                while let Some((offset, next)) =
+                    chars.next_if(|&(_, next)| matches!(next, ' ' | '\t' | '\r' | '\n'))
+                {
+                    end = offset + next.len_utf8();
+                }
+                SyntaxKind::Whitespace
+            }
+            ch if ch.is_ascii_alphabetic() || ch == '_' => {
+                while let Some((offset, next)) =
+                    chars.next_if(|&(_, next)| next.is_ascii_alphanumeric() || next == '_')
+                {
+                    end = offset + next.len_utf8();
+                }
+                SyntaxKind::Identifier
+            }
+            _ => SyntaxKind::Error,
+        };
+        let range = TextRange::new(TextSize(start), TextSize(end))
+            .expect("character end follows its start");
+
+        tokens.push(Token { kind, range });
+    }
+
+    tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextRange, TextSize};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()=!");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source);
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(tokens[0].range.slice(source), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(tokens[1].range.slice(source), Some("!"));
+    }
+
+    #[test]
+    fn scans_adjacent_paired_operators() {
+        assert_eq!(
+            scan("!==="),
+            vec![
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::EqualEqual,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_lookahead_preserves_the_next_character() {
+        assert_eq!(
+            scan("!é("),
+            vec![
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn single_operator_can_end_the_source() {
+        for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifiers_stop_before_operators() {
+        assert_eq!(
+            scan("a_2!=other"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(5), TextSize(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn identifiers_can_end_the_source() {
+        for source in ["_", "A9", "print"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifier_rules_preserve_unsupported_characters() {
+        assert_eq!(
+            scan("2aé_b"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(4), TextSize(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_whitespace_between_tokens() {
+        assert_eq!(
+            scan("a \t\r\n!= b"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(5), TextSize(7)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(7), TextSize(8)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(8), TextSize(9)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn whitespace_uses_the_lox_character_set() {
+        for source in ["\u{000b}", "\u{000c}", "\u{00a0}"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_ranges_cover_the_original_source() {
+        for source in [
+            "",
+            " \t\r\n",
+            "a \t\r\n!= b",
+            "a_2!=other",
+            "2aé_b",
+            "a\u{00a0}b",
+        ] {
+            let mut offset = 0;
+            let mut reconstructed = String::new();
+
+            for token in scan(source) {
+                let text = token.range.slice(source).expect("valid UTF-8 source slice");
+                assert!(!text.is_empty());
+                let end = offset + text.len();
+                let expected = TextRange::new(TextSize(offset), TextSize(end)).unwrap();
+                assert_eq!(token.range, expected);
+
+                reconstructed.push_str(text);
+                offset = end;
+            }
+
+            assert_eq!(offset, source.len());
+            assert_eq!(reconstructed, source);
+        }
+    }
+}
+```
+
+</details>
+
+Whitespace now has an ordinary place in the token stream, and we have a
+repeatable check that scanning keeps the original source. Next we’ll retain
+another kind of trivia: line comments.
+
+[Crafting Interpreters’ discussion of comments and whitespace](https://craftinginterpreters.com/scanning.html#longer-lexemes)
+shows where an execution-focused scanner can skip these characters. Keeping
+them gives our later editor and syntax tools access to the original spelling.

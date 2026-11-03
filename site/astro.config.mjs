@@ -51,6 +51,7 @@ export default defineConfig({
           label: '6 · Tokens That Grow',
           items: [
             { label: '6.1 · Let a name grow', link: '/chapter-6/6.1-identifiers/' },
+            { label: '6.2 · Keep the spaces', link: '/chapter-6/6.2-whitespace/' },
           ],
         },
       ],

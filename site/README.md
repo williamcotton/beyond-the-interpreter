@@ -97,3 +97,9 @@ Section 6.1 is drafted at `src/content/docs/chapter-6/6.1-identifiers.mdx`,
 served at `/chapter-6/6.1-identifiers/`. Its cursor steps through a growing
 identifier and the character left unread. The section, identifier scanner, and cursor are accepted;
 local checks and native cursor comparisons pass.
+
+Section 6.2 is drafted at `src/content/docs/chapter-6/6.2-whitespace.mdx`,
+served at `/chapter-6/6.2-whitespace/`. A static annotated token listing
+explains retained whitespace; the text adds classification and source-coverage
+checks. The section and matching Rust are accepted; local workspace checks
+and native example consistency are verified.
