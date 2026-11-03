@@ -74,6 +74,8 @@ pub enum SyntaxKind {
     Var,
     #[token("while")]
     While,
+    #[regex(r#""[^"]*""#)]
+    String,
     #[regex(r"[0-9]+(\.[0-9]+)?")]
     Number,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
@@ -339,6 +341,14 @@ mod tests {
             "123. .5 -12 +3.5 1.2.3",
             "123abc a2",
             "print 0.5;//é\n123.",
+            r#"print "é";"#,
+            r#""a""b";"#,
+            r#""\"name"#,
+            "\"first\nsecond\" // done\n0.5",
+            "\"",
+            "\"é",
+            "\"first\n// still inside",
+            r#""ok""é"#,
         ] {
             let mut offset = 0;
             let mut reconstructed = String::new();
@@ -648,5 +658,99 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn keeps_complete_string_spellings() {
+        for source in [
+            r#""""#,
+            r#""hello""#,
+            r#""// 123 ; print""#,
+            "\"é💥\"",
+            "\"first\nsecond\"",
+            r#""\n""#,
+        ] {
+            let tokens = scan(source);
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+            assert_eq!(tokens[0].range.slice(source), Some(source));
+        }
+    }
+
+    #[test]
+    fn strings_stop_at_the_next_quote() {
+        let source = r#""a""b";"#;
+        let tokens = scan(source);
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(3), TextSize(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Semicolon,
+                    range: TextRange::new(TextSize(6), TextSize(7)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(tokens[0].range.slice(source), Some(r#""a""#));
+        assert_eq!(tokens[1].range.slice(source), Some(r#""b""#));
+    }
+
+    #[test]
+    fn backslash_does_not_escape_a_quote() {
+        let source = r#""\"name"#;
+        assert_eq!(
+            scan(source),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn unterminated_strings_cover_the_remaining_source() {
+        for source in ["\"", "\"é", "\"first\n// still inside"] {
+            let tokens = scan(source);
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+            assert_eq!(tokens[0].range.slice(source), Some(source));
+        }
+
+        assert_eq!(
+            scan(r#""ok""é"#),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(0), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(4), TextSize(7)).unwrap(),
+                },
+            ]
+        );
     }
 }

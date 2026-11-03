@@ -129,3 +129,8 @@ Rust and local checks are verified and accepted.
 Section 7.4 is drafted at `src/content/docs/chapter-7/7.4-numbers.mdx`,
 served at `/chapter-7/7.4-numbers/`. Its number spellings and decimal boundaries
 and the matching number scanner/ordered reader-route checks are accepted.
+
+Section 7.5 is drafted at `src/content/docs/chapter-7/7.5-strings.mdx`, served
+at `/chapter-7/7.5-strings/`. Quoted strings, multiline contents and unfinished
+input and their matching Rust/ordered reader-route checks are accepted,
+completing Chapter 7.

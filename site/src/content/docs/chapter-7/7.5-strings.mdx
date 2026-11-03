@@ -1,0 +1,1024 @@
+---
+title: 7.5 — Keep strings together
+slug: chapter-7/7.5-strings
+description: Retain quoted strings, multiline contents, and unterminated input as complete source ranges.
+prev:
+  link: /chapter-7/7.4-numbers/
+  label: 7.4 · Recognize number spellings
+next: false
+---
+
+<p className="book-subtitle">Chapter 7 · From Handwritten Scanning to Logos</p>
+
+In `print "hello";`, the word `hello` currently becomes an identifier and each
+quote becomes an error. But those quotes change what the characters between
+them mean. Spaces, digits and even `//` inside a string belong to that string,
+rather than becoming separate tokens.
+
+Start from [Section 7.4](/chapter-7/7.4-numbers/), with your terminal in
+**`rlox/`**. All edits belong to **`rlox/crates/syntax/src/lib.rs`**.
+
+## From opening quote to closing quote
+
+A Lox string starts with `"` and ends at the next `"`. It can be empty, and
+its contents can include Unicode characters and actual line breaks. These
+are the [string rules in Crafting Interpreters](https://craftinginterpreters.com/scanning.html#string-literals).
+
+Our token range will include both quotes. For the source `print "é";`, the
+target is:
+
+```text title="The string keeps its delimiters and original bytes"
+Print       [0, 5)   "print"
+Whitespace  [5, 6)   " "
+String      [6, 10)  "\"é\""
+Semicolon   [10, 11) ";"
+```
+
+The string occupies four bytes: one opening quote, two bytes for `é`, and one
+closing quote. As with numbers and names, `token.range.slice(source)` returns
+the original spelling. Later code can derive a string's value from that
+spelling; the scanner keeps the source intact.
+
+## Match everything except another quote
+
+Inside `SyntaxKind`, insert these lines **immediately before the existing
+`#[regex(r"[0-9]+(\.[0-9]+)?")]` attribute on `Number`**:
+
+```rust title="rlox/crates/syntax/src/lib.rs · insert before Number"
+#[regex(r#""[^"]*""#)]
+String,
+```
+
+The regex itself is `"[^"]*"`: an opening quote, zero or more characters
+other than a quote, then a closing quote. Because the repeated class excludes
+`"`, it cannot swallow the closing delimiter or merge adjacent strings.
+Unlike a dot wildcard, this class also accepts line breaks without a flag.
+It accepts spaces, slashes and other punctuation too; they stay inside the
+single `String` token.
+
+The Rust notation needs a closer look. Our earlier `r"..."` raw strings
+couldn't contain a quote because that quote would end the Rust
+literal. Here `r#"..."#` uses matching hashes around its delimiters, allowing
+ordinary quote characters inside. Only the ending `"#` closes this Rust raw
+string. The [Rust Reference's raw string discussion](https://doc.rust-lang.org/reference/tokens.html#raw-string-literals)
+describes that syntax. The hashes are Rust notation, not part of the regex
+or the Lox source being matched.
+
+`String` here is an enum variant, `SyntaxKind::String`. It has no owned string
+field, and it doesn't change the standard library's `String` type used in our
+reconstruction test. Keep `Token`, `scan`, the other rules, imports, and
+manifest unchanged.
+
+## Backslashes remain ordinary characters
+
+Lox doesn't process escape sequences. Inside a Lox string, the two characters
+`\` and `n` remain two characters; they aren't converted into a line break.
+An actual line break is also allowed. A backslash doesn't protect a following
+quote: that quote still ends the string.
+
+This is distinct from how we write test inputs in Rust. Rust's `"\n"`
+constructs an actual line break, while `r"\n"` constructs a backslash and `n`.
+We'll use Rust raw strings when the exact Lox quote/backslash spelling needs
+to stay visible, and ordinary Rust strings when inserting an actual newline.
+
+Append these tests **inside the existing `mod tests`, before its closing
+brace**, retaining the existing imports and tests:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append inside mod tests"
+#[test]
+fn keeps_complete_string_spellings() {
+    for source in [
+        r#""""#,
+        r#""hello""#,
+        r#""// 123 ; print""#,
+        "\"é💥\"",
+        "\"first\nsecond\"",
+        r#""\n""#,
+    ] {
+        let tokens = scan(source);
+        assert_eq!(
+            tokens,
+            vec![Token {
+                kind: SyntaxKind::String,
+                range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+            }]
+        );
+        assert_eq!(tokens[0].range.slice(source), Some(source));
+    }
+}
+
+#[test]
+fn strings_stop_at_the_next_quote() {
+    let source = r#""a""b";"#;
+    let tokens = scan(source);
+    assert_eq!(
+        tokens,
+        vec![
+            Token {
+                kind: SyntaxKind::String,
+                range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::String,
+                range: TextRange::new(TextSize(3), TextSize(6)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Semicolon,
+                range: TextRange::new(TextSize(6), TextSize(7)).unwrap(),
+            },
+        ]
+    );
+    assert_eq!(tokens[0].range.slice(source), Some(r#""a""#));
+    assert_eq!(tokens[1].range.slice(source), Some(r#""b""#));
+}
+
+#[test]
+fn backslash_does_not_escape_a_quote() {
+    let source = r#""\"name"#;
+    assert_eq!(
+        scan(source),
+        vec![
+            Token {
+                kind: SyntaxKind::String,
+                range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Identifier,
+                range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
+            },
+        ]
+    );
+}
+```
+
+The first test checks complete spellings, including empty, UTF-8, multiline
+and literal backslash contents. The next test requires adjacent quoted pieces
+to stay separate and leaves the semicolon outside. The last input contains an
+opening quote, a backslash, a closing quote and `name`: its string ends after
+three bytes, and the name becomes an identifier.
+
+## If the closing quote never arrives
+
+For the source consisting of an opening quote followed by `é`, we want one
+error covering all three bytes:
+
+```text title="An unfinished string remains one source fragment"
+Error  [0, 3)  "\"é"
+```
+
+The closing quote is required by the rule, so this isn't a successful string
+match. Logos can read the opening quote and all the non-quote contents, but
+reaches the end without completing a token. Its
+[error span rules](https://logos.maciej.codes/common-regex.html#error-semantics)
+let our existing adapter retain that consumed fragment as `Error`.
+No callback or second scanning loop is needed.
+
+This expands the reason for an error range: an unknown character still
+produces its own error, while an unfinished string spans from its opening
+quote through EOF. There is no newline recovery here because Lox permits
+multiline strings. Text that looks like a comment remains part of the
+unfinished string too. A later diagnostic can explain the missing delimiter;
+for now we preserve the text and finish scanning without losing bytes or
+repeating the same position.
+
+Append this test **inside the same test module**:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append inside mod tests"
+#[test]
+fn unterminated_strings_cover_the_remaining_source() {
+    for source in ["\"", "\"é", "\"first\n// still inside"] {
+        let tokens = scan(source);
+        assert_eq!(
+            tokens,
+            vec![Token {
+                kind: SyntaxKind::Error,
+                range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+            }]
+        );
+        assert_eq!(tokens[0].range.slice(source), Some(source));
+    }
+
+    assert_eq!(
+        scan(r#""ok""é"#),
+        vec![
+            Token {
+                kind: SyntaxKind::String,
+                range: TextRange::new(TextSize(0), TextSize(4)).unwrap(),
+            },
+            Token {
+                kind: SyntaxKind::Error,
+                range: TextRange::new(TextSize(4), TextSize(7)).unwrap(),
+            },
+        ]
+    );
+}
+```
+
+The first cases cover a lone opening quote, a multibyte character and an
+actual newline followed by comment-like text. The final case checks that a
+complete string can be followed immediately by an unfinished one: only the
+second fragment becomes `Error`, at its own byte offset.
+
+## Preserve the whole source
+
+Extend the input array in `token_ranges_cover_the_original_source` by adding
+these entries **after `"print 0.5;//é\n123.",`**, leaving all prior inputs
+and its checking loop intact:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append coverage inputs"
+r#"print "é";"#,
+r#""a""b";"#,
+r#""\"name"#,
+"\"first\nsecond\" // done\n0.5",
+"\"",
+"\"é",
+"\"first\n// still inside",
+r#""ok""é"#,
+```
+
+These cases put successful and unfinished strings into the existing
+contiguous-range and exact-reconstruction checks. Retained trivia still
+covers whitespace and comments outside a string; characters inside one
+belong to its range.
+
+From **`rlox/`**, run:
+
+```sh
+cargo test -p rlox-syntax
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+The string, boundary and unterminated-input tests should report `ok`, along
+with the earlier scanner tests. Formatting and Clippy should finish
+successfully. Dependencies and `Cargo.lock` should stay unchanged.
+
+We now have rules for Lox's lexical categories, including strings. Our scanner
+also keeps whitespace, comments and malformed fragments, giving later tools
+the original source as well as its token kinds. The command-line program
+still displays source; making tokens inspectable is the next chapter's job.
+
+<details>
+<summary>Complete resulting syntax library</summary>
+
+```rust title="rlox/crates/syntax/src/lib.rs · complete resulting file"
+use logos::Logos;
+
+use rlox_text::{TextRange, TextSize};
+
+#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxKind {
+    #[token("(")]
+    LeftParen,
+    #[token(")")]
+    RightParen,
+    #[token("{")]
+    LeftBrace,
+    #[token("}")]
+    RightBrace,
+    #[token(",")]
+    Comma,
+    #[token(".")]
+    Dot,
+    #[token("-")]
+    Minus,
+    #[token("+")]
+    Plus,
+    #[token(";")]
+    Semicolon,
+    #[token("/")]
+    Slash,
+    #[token("*")]
+    Star,
+    #[token("!")]
+    Bang,
+    #[token("!=")]
+    BangEqual,
+    #[token("=")]
+    Equal,
+    #[token("==")]
+    EqualEqual,
+    #[token(">")]
+    Greater,
+    #[token(">=")]
+    GreaterEqual,
+    #[token("<")]
+    Less,
+    #[token("<=")]
+    LessEqual,
+    #[token("and")]
+    And,
+    #[token("class")]
+    Class,
+    #[token("else")]
+    Else,
+    #[token("false")]
+    False,
+    #[token("for")]
+    For,
+    #[token("fun")]
+    Fun,
+    #[token("if")]
+    If,
+    #[token("nil")]
+    Nil,
+    #[token("or")]
+    Or,
+    #[token("print")]
+    Print,
+    #[token("return")]
+    Return,
+    #[token("super")]
+    Super,
+    #[token("this")]
+    This,
+    #[token("true")]
+    True,
+    #[token("var")]
+    Var,
+    #[token("while")]
+    While,
+    #[regex(r#""[^"]*""#)]
+    String,
+    #[regex(r"[0-9]+(\.[0-9]+)?")]
+    Number,
+    #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
+    Identifier,
+    #[regex(r"[ \t\r\n]+")]
+    Whitespace,
+    #[regex(r"//[^\n]*", allow_greedy = true)]
+    LineComment,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+
+pub fn scan(source: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+
+    for (result, span) in SyntaxKind::lexer(source).spanned() {
+        let kind = match result {
+            Ok(kind) => kind,
+            Err(()) => SyntaxKind::Error,
+        };
+        let range = TextRange::new(TextSize(span.start), TextSize(span.end))
+            .expect("Logos spans are ordered");
+
+        tokens.push(Token { kind, range });
+    }
+
+    tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextRange, TextSize};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()=!");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source);
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(tokens[0].range.slice(source), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(tokens[1].range.slice(source), Some("!"));
+    }
+
+    #[test]
+    fn scans_adjacent_paired_operators() {
+        assert_eq!(
+            scan("!==="),
+            vec![
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::EqualEqual,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_lookahead_preserves_the_next_character() {
+        assert_eq!(
+            scan("!é("),
+            vec![
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn single_operator_can_end_the_source() {
+        for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifiers_stop_before_operators() {
+        assert_eq!(
+            scan("a_2!=other"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(5), TextSize(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn identifiers_can_end_the_source() {
+        for source in ["_", "A9", "printer"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn number_and_name_boundaries_preserve_unknown_characters() {
+        assert_eq!(
+            scan("2aé_b"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Number,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(4), TextSize(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_whitespace_between_tokens() {
+        assert_eq!(
+            scan("a \t\r\n!= b"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(5), TextSize(7)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(7), TextSize(8)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(8), TextSize(9)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn whitespace_uses_the_lox_character_set() {
+        for source in ["\u{000b}", "\u{000c}", "\u{00a0}"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_ranges_cover_the_original_source() {
+        for source in [
+            "",
+            " \t\r\n",
+            "a \t\r\n!= b",
+            "a_2!=other",
+            "2aé_b",
+            "a\u{00a0}b",
+            "/",
+            "/name",
+            "//",
+            "//\n",
+            "//é\r\nname",
+            "///",
+            "a//x\nb",
+            "{},.-+;*",
+            "<=>=<>",
+            "<==>==",
+            "a<=b!=c>=d",
+            "(a+b)*c;",
+            "print printer",
+            "for forest",
+            "class classify",
+            "if(if_1)",
+            "return // print\nprinter",
+            "0 001 123.456",
+            "123. .5 -12 +3.5 1.2.3",
+            "123abc a2",
+            "print 0.5;//é\n123.",
+            r#"print "é";"#,
+            r#""a""b";"#,
+            r#""\"name"#,
+            "\"first\nsecond\" // done\n0.5",
+            "\"",
+            "\"é",
+            "\"first\n// still inside",
+            r#""ok""é"#,
+        ] {
+            let mut offset = 0;
+            let mut reconstructed = String::new();
+
+            for token in scan(source) {
+                let text = token.range.slice(source).expect("valid UTF-8 source slice");
+                assert!(!text.is_empty());
+                let end = offset + text.len();
+                let expected = TextRange::new(TextSize(offset), TextSize(end)).unwrap();
+                assert_eq!(token.range, expected);
+
+                reconstructed.push_str(text);
+                offset = end;
+            }
+
+            assert_eq!(offset, source.len());
+            assert_eq!(reconstructed, source);
+        }
+    }
+
+    #[test]
+    fn recognizes_single_slashes() {
+        assert_eq!(
+            scan("/"),
+            vec![Token {
+                kind: SyntaxKind::Slash,
+                range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+            }]
+        );
+        assert_eq!(
+            scan("/name"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Slash,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_leave_the_line_feed_unread() {
+        assert_eq!(
+            scan("//é\r\nname"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LineComment,
+                    range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(6), TextSize(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_can_end_at_eof() {
+        for source in ["//", "//é", "///"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::LineComment,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_characters_remain_separate_tokens() {
+        assert_eq!(
+            scan("@é💥"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_remaining_single_character_punctuation() {
+        for (source, kind) in [
+            ("{", SyntaxKind::LeftBrace),
+            ("}", SyntaxKind::RightBrace),
+            (",", SyntaxKind::Comma),
+            (".", SyntaxKind::Dot),
+            ("-", SyntaxKind::Minus),
+            ("+", SyntaxKind::Plus),
+            (";", SyntaxKind::Semicolon),
+            ("*", SyntaxKind::Star),
+            ("<", SyntaxKind::Less),
+            (">", SyntaxKind::Greater),
+        ] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn recognizes_adjacent_comparison_operators() {
+        assert_eq!(
+            scan("<=>=<>"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Less,
+                    range: TextRange::new(TextSize(4), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Greater,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn comparison_pairs_leave_extra_equals_tokens() {
+        assert_eq!(
+            scan("<==>=="),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_reserved_words() {
+        for (source, kind) in [
+            ("and", SyntaxKind::And),
+            ("class", SyntaxKind::Class),
+            ("else", SyntaxKind::Else),
+            ("false", SyntaxKind::False),
+            ("for", SyntaxKind::For),
+            ("fun", SyntaxKind::Fun),
+            ("if", SyntaxKind::If),
+            ("nil", SyntaxKind::Nil),
+            ("or", SyntaxKind::Or),
+            ("print", SyntaxKind::Print),
+            ("return", SyntaxKind::Return),
+            ("super", SyntaxKind::Super),
+            ("this", SyntaxKind::This),
+            ("true", SyntaxKind::True),
+            ("var", SyntaxKind::Var),
+            ("while", SyntaxKind::While),
+        ] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn keywords_do_not_split_longer_identifiers() {
+        for source in [
+            "forest",
+            "printer",
+            "classify",
+            "true_value",
+            "_if",
+            "Print",
+        ] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_spelling_comes_from_the_source() {
+        let source = "print printer";
+        let tokens = scan(source);
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::Print,
+                    range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(6), TextSize(13)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(tokens[0].range.slice(source), Some("print"));
+        assert_eq!(tokens[1].range.slice(source), Some(" "));
+        assert_eq!(tokens[2].range.slice(source), Some("printer"));
+    }
+
+    #[test]
+    fn recognizes_number_spellings() {
+        for source in ["0", "123", "001", "0.5", "123.456", "00.50"] {
+            let tokens = scan(source);
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Number,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+            assert_eq!(tokens[0].range.slice(source), Some(source));
+        }
+    }
+
+    #[test]
+    fn numbers_leave_dots_signs_and_names_separate() {
+        for (source, expected) in [
+            (
+                "123.",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Dot, 3, 4)],
+            ),
+            (
+                ".5",
+                vec![(SyntaxKind::Dot, 0, 1), (SyntaxKind::Number, 1, 2)],
+            ),
+            (
+                "-12",
+                vec![(SyntaxKind::Minus, 0, 1), (SyntaxKind::Number, 1, 3)],
+            ),
+            (
+                "+3.5",
+                vec![(SyntaxKind::Plus, 0, 1), (SyntaxKind::Number, 1, 4)],
+            ),
+            (
+                "1.2.3",
+                vec![
+                    (SyntaxKind::Number, 0, 3),
+                    (SyntaxKind::Dot, 3, 4),
+                    (SyntaxKind::Number, 4, 5),
+                ],
+            ),
+            (
+                "123abc",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Identifier, 3, 6)],
+            ),
+            ("a2", vec![(SyntaxKind::Identifier, 0, 2)]),
+        ] {
+            let tokens = scan(source);
+            assert_eq!(tokens.len(), expected.len(), "{source}");
+            for (token, (kind, start, end)) in tokens.iter().zip(expected) {
+                assert_eq!(token.kind, kind, "{source}");
+                assert_eq!(
+                    token.range,
+                    TextRange::new(TextSize(start), TextSize(end)).unwrap(),
+                    "{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn keeps_complete_string_spellings() {
+        for source in [
+            r#""""#,
+            r#""hello""#,
+            r#""// 123 ; print""#,
+            "\"é💥\"",
+            "\"first\nsecond\"",
+            r#""\n""#,
+        ] {
+            let tokens = scan(source);
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+            assert_eq!(tokens[0].range.slice(source), Some(source));
+        }
+    }
+
+    #[test]
+    fn strings_stop_at_the_next_quote() {
+        let source = r#""a""b";"#;
+        let tokens = scan(source);
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(3), TextSize(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Semicolon,
+                    range: TextRange::new(TextSize(6), TextSize(7)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(tokens[0].range.slice(source), Some(r#""a""#));
+        assert_eq!(tokens[1].range.slice(source), Some(r#""b""#));
+    }
+
+    #[test]
+    fn backslash_does_not_escape_a_quote() {
+        let source = r#""\"name"#;
+        assert_eq!(
+            scan(source),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn unterminated_strings_cover_the_remaining_source() {
+        for source in ["\"", "\"é", "\"first\n// still inside"] {
+            let tokens = scan(source);
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+            assert_eq!(tokens[0].range.slice(source), Some(source));
+        }
+
+        assert_eq!(
+            scan(r#""ok""é"#),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(0), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(4), TextSize(7)).unwrap(),
+                },
+            ]
+        );
+    }
+}
+```
+
+</details>
