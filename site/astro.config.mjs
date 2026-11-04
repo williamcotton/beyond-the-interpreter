@@ -70,6 +70,7 @@ export default defineConfig({
           items: [
             { label: '8.1 · Show tokens from a file', link: '/chapter-8/8.1-token-command/' },
             { label: '8.2 · Report an unsuccessful scan', link: '/chapter-8/8.2-scan-status/' },
+            { label: '8.3 · Test the command readers run', link: '/chapter-8/8.3-cli-tests/' },
           ],
         },
       ],

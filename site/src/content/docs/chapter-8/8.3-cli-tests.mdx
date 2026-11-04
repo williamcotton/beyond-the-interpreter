@@ -1,0 +1,475 @@
+---
+title: 8.3 — Test the command readers run
+slug: chapter-8/8.3-cli-tests
+description: Run the real executable in integration tests and check output bytes, stderr, and exit status.
+prev:
+  link: /chapter-8/8.2-scan-status/
+  label: 8.2 · Report an unsuccessful scan
+next: false
+---
+
+<p className="book-subtitle">Chapter 8 · Inspecting Tokens</p>
+
+Suppose we accidentally print the lexical-error summary to stdout. The scanner
+would still return the right tokens, and the argument parser would still
+accept `tokens FILE`. Their unit tests could pass while the command produces
+the wrong output. We need a test that runs the executable and observes what
+another process would receive.
+
+Start from [Section 8.2](/chapter-8/8.2-scan-status/), with your terminal in
+**`rlox/`**. We'll add one test-only dependency and one integration test file.
+The finished inspector's production code stays as it is; near the end we'll
+briefly introduce and restore a deliberate output regression.
+
+## Give each test its own files
+
+A test shouldn't depend on your current `hello.lox`, leave rewritten examples
+behind, or collide with another test's input. A private temporary directory
+lets each test choose a filename and control its exact bytes.
+
+Append this **new table at the end of `rlox/crates/app/Cargo.toml`**, after
+the existing dependencies:
+
+```toml title="rlox/crates/app/Cargo.toml · append new table"
+[dev-dependencies]
+tempfile = "=3.27.0"
+```
+
+`dev-dependencies` makes a package available to tests without making it a
+normal dependency of the executable. We use
+[tempfile 3.27.0](https://docs.rs/tempfile/3.27.0/tempfile/)
+for `tempdir()`: it creates a directory with a unique path and removes it
+when its owner goes out of scope. That saves us from inventing naming and
+cleanup machinery just to test our command. Keep the directory owner alive
+until the child process has finished using its files.
+
+## Run the real binary
+
+From **`rlox/`**, create the test directory:
+
+```sh
+mkdir -p crates/app/tests
+```
+
+Create **`rlox/crates/app/tests/cli.rs`** with these imports and the first test:
+
+```rust title="rlox/crates/app/tests/cli.rs · initial file"
+use std::fs;
+use std::process::Command;
+
+use tempfile::tempdir;
+
+#[test]
+fn tokens_show_utf8_ranges_and_trivia() {
+    let directory = tempdir().expect("create test directory");
+    let input = directory.path().join("input.lox");
+    fs::write(&input, "print \"é\";\n").expect("write test source");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rlox"))
+        .arg("tokens")
+        .arg(&input)
+        .output()
+        .expect("run rlox");
+
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "Print [0..5) \"print\"\n",
+            "Whitespace [5..6) \" \"\n",
+            "String [6..10) \"\\\"é\\\"\"\n",
+            "Semicolon [10..11) \";\"\n",
+            "Whitespace [11..12) \"\\n\"\n",
+        )
+        .as_bytes()
+    );
+    assert!(output.stderr.is_empty());
+}
+```
+
+Cargo discovers a file under the package's `tests/` directory as a separate
+integration-test target. There is no surrounding `mod tests` or
+`#[cfg(test)]` needed here. The Rust Book's
+[test organization chapter](https://doc.rust-lang.org/book/ch11-03-test-organization.html#integration-tests)
+explains this layout. We're testing a binary through its process interface,
+so we don't import private app functions.
+
+The test writes exactly the UTF-8 source used in 8.1, including its final
+newline. `directory.path().join(...)` creates a path inside the temporary
+directory; `fs::write` creates the file there. We pass the path directly to
+`.arg(&input)`, so spaces in its location don't require shell quoting.
+
+`env!("CARGO_BIN_EXE_rlox")` is a compile-time macro. Cargo supplies the path
+to this package's `rlox` binary when building integration tests, as documented
+in its [test environment variables](https://doc.rust-lang.org/cargo/reference/environment-variables.html#environment-variables-cargo-sets-for-crates).
+This avoids guessing `target/debug/rlox`, relying on `PATH`, or launching
+`cargo run` inside another Cargo test.
+
+`Command` here is `std::process::Command`, a child-process builder, rather
+than our app's private command enum. Its
+[`output()` method](https://doc.rust-lang.org/std/process/struct.Command.html#method.output)
+starts the child, waits for it, and captures stdout and stderr separately.
+The returned `Output` also includes the child's exit status.
+
+The `expect("run rlox")` checks whether the process could be started and
+collected. It doesn't mean the command returned success: the next assertion
+checks that separately. The stream fields contain bytes, so `.as_bytes()`
+compares exact output, preserving UTF-8 and line endings. `concat!` joins our
+expected row literals into one string without hiding the row boundaries.
+We write the expected rows independently rather than calling the scanner to
+construct our expected answer.
+
+## Check failure without losing the listing
+
+Append this test **at the end of `cli.rs`**:
+
+```rust title="rlox/crates/app/tests/cli.rs · append lexical failure test"
+#[test]
+fn lexical_errors_keep_the_listing() {
+    let directory = tempdir().expect("create test directory");
+    let input = directory.path().join("input.lox");
+
+    for (source, expected) in [
+        (
+            "@é!\n",
+            concat!(
+                "Error [0..1) \"@\"\n",
+                "Error [1..3) \"é\"\n",
+                "Bang [3..4) \"!\"\n",
+                "Whitespace [4..5) \"\\n\"\n",
+            ),
+        ),
+        ("\"é\n", "Error [0..4) \"\\\"é\\n\"\n"),
+    ] {
+        fs::write(&input, source).expect("write test source");
+        let output = Command::new(env!("CARGO_BIN_EXE_rlox"))
+            .arg("tokens")
+            .arg(&input)
+            .output()
+            .expect("run rlox");
+
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(output.stdout, expected.as_bytes());
+        assert_eq!(output.stderr, b"rlox: scan contains lexical errors\n");
+    }
+}
+```
+
+The first input requires valid tokens after an error to stay visible. The
+second requires the unfinished string to remain one range through EOF.
+Both must return status `1`, with rows on stdout and exactly one summary on
+stderr. Checking all three observations catches a broken failure status,
+an early return, and a summary written to the wrong stream.
+
+We reuse one temporary path within this test, overwriting it before each
+child runs. Other tests get independent directories. This lets Cargo run
+tests concurrently without one test changing another's input.
+
+## Keep the neighboring command behavior
+
+Append these tests **at the end of the same file**:
+
+```rust title="rlox/crates/app/tests/cli.rs · append boundary tests"
+#[test]
+fn empty_input_succeeds_without_output() {
+    let directory = tempdir().expect("create test directory");
+    let input = directory.path().join("empty.lox");
+    fs::write(&input, "").expect("write empty source");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rlox"))
+        .arg("tokens")
+        .arg(&input)
+        .output()
+        .expect("run rlox");
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn source_still_displays_malformed_lox() {
+    let directory = tempdir().expect("create test directory");
+    let input = directory.path().join("input.lox");
+    let source = "@é!\n";
+    fs::write(&input, source).expect("write test source");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rlox"))
+        .arg("source")
+        .arg(&input)
+        .output()
+        .expect("run rlox");
+
+    assert!(output.status.success());
+    assert_eq!(output.stdout, source.as_bytes());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn missing_file_reports_a_read_error() {
+    let directory = tempdir().expect("create test directory");
+    let missing = directory.path().join("missing.lox");
+
+    for command in ["source", "tokens"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_rlox"))
+            .arg(command)
+            .arg(&missing)
+            .output()
+            .expect("run rlox");
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 error message");
+        assert!(stderr.starts_with("rlox: could not read '"));
+        assert!(stderr.contains("missing.lox"));
+    }
+}
+
+#[test]
+fn tokens_requires_a_filename() {
+    let output = Command::new(env!("CARGO_BIN_EXE_rlox"))
+        .arg("tokens")
+        .output()
+        .expect("run rlox");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 usage message");
+    assert!(stderr.contains("Usage: rlox tokens <FILE>"));
+}
+```
+
+The empty file checks the success path when the scanner produces no tokens.
+The source test makes sure lexical failure remains specific to `tokens`:
+readable source still prints exactly as supplied.
+
+For a missing file, the test creates only a directory and chooses a path
+that doesn't exist. We check the app's read-error prefix and the filename,
+rather than matching the operating system's full error wording. Usage is a
+different failure: missing a required filename should be status `2`, with
+usage on stderr and nothing on stdout. The earlier unit tests still cover
+additional argument combinations.
+
+## Watch the tests catch a mistake
+
+From **`rlox/`**, run:
+
+```sh
+cargo test -p rlox-app --test cli
+```
+
+The named tests should pass. Cargo will fetch the new test dependency and
+record its resolved dependencies in `Cargo.lock`; keep that generated change.
+The existing registry versions needn't be upgraded, and the new dependency
+doesn't change the command's production behavior.
+
+Now intentionally break the stream separation. In
+**`rlox/crates/app/src/main.rs`**, change only the summary inside the
+`if had_error` block:
+
+```diff title="rlox/crates/app/src/main.rs · deliberate regression"
+             if had_error {
+-                eprintln!("rlox: scan contains lexical errors");
++                println!("rlox: scan contains lexical errors");
+                 return ExitCode::FAILURE;
+             }
+```
+
+Run just the lexical failure test:
+
+```sh
+cargo test -p rlox-app --test cli lexical_errors_keep_the_listing
+```
+
+This command should fail. The stdout assertion now receives the token rows
+*and* the summary, instead of exactly the expected rows. The test doesn't
+need to reach the stderr assertion to expose the mistake.
+
+Restore the correct stream before continuing:
+
+```diff title="rlox/crates/app/src/main.rs · restore the summary"
+             if had_error {
+-                println!("rlox: scan contains lexical errors");
++                eprintln!("rlox: scan contains lexical errors");
+                 return ExitCode::FAILURE;
+             }
+```
+
+Then run:
+
+```sh
+cargo test -p rlox-app --test cli lexical_errors_keep_the_listing
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+The focused test should pass again, followed by formatting, Clippy and the
+workspace tests. The final `main.rs` should be exactly as it was at the start
+of this section. Our tests create and clean up their own inputs, so no new
+`.lox` examples or output captures need to be committed.
+
+The inspector now has checks at both useful boundaries: unit tests explain
+individual scanner and argument rules, while process tests verify how file
+reading, dispatch, token printing and exit status work together. This gives
+us a repeatable way to protect the command readers actually run.
+
+<details>
+<summary>Complete resulting app manifest</summary>
+
+```toml title="rlox/crates/app/Cargo.toml · complete resulting file"
+[package]
+name = "rlox-app"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "rlox"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "=4.6.7", features = ["derive"] }
+rlox-syntax = { path = "../syntax" }
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+```
+
+</details>
+
+<details>
+<summary>Complete resulting integration test file</summary>
+
+```rust title="rlox/crates/app/tests/cli.rs · complete resulting file"
+use std::fs;
+use std::process::Command;
+
+use tempfile::tempdir;
+
+#[test]
+fn tokens_show_utf8_ranges_and_trivia() {
+    let directory = tempdir().expect("create test directory");
+    let input = directory.path().join("input.lox");
+    fs::write(&input, "print \"é\";\n").expect("write test source");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rlox"))
+        .arg("tokens")
+        .arg(&input)
+        .output()
+        .expect("run rlox");
+
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "Print [0..5) \"print\"\n",
+            "Whitespace [5..6) \" \"\n",
+            "String [6..10) \"\\\"é\\\"\"\n",
+            "Semicolon [10..11) \";\"\n",
+            "Whitespace [11..12) \"\\n\"\n",
+        )
+        .as_bytes()
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn lexical_errors_keep_the_listing() {
+    let directory = tempdir().expect("create test directory");
+    let input = directory.path().join("input.lox");
+
+    for (source, expected) in [
+        (
+            "@é!\n",
+            concat!(
+                "Error [0..1) \"@\"\n",
+                "Error [1..3) \"é\"\n",
+                "Bang [3..4) \"!\"\n",
+                "Whitespace [4..5) \"\\n\"\n",
+            ),
+        ),
+        ("\"é\n", "Error [0..4) \"\\\"é\\n\"\n"),
+    ] {
+        fs::write(&input, source).expect("write test source");
+        let output = Command::new(env!("CARGO_BIN_EXE_rlox"))
+            .arg("tokens")
+            .arg(&input)
+            .output()
+            .expect("run rlox");
+
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(output.stdout, expected.as_bytes());
+        assert_eq!(output.stderr, b"rlox: scan contains lexical errors\n");
+    }
+}
+
+#[test]
+fn empty_input_succeeds_without_output() {
+    let directory = tempdir().expect("create test directory");
+    let input = directory.path().join("empty.lox");
+    fs::write(&input, "").expect("write empty source");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rlox"))
+        .arg("tokens")
+        .arg(&input)
+        .output()
+        .expect("run rlox");
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn source_still_displays_malformed_lox() {
+    let directory = tempdir().expect("create test directory");
+    let input = directory.path().join("input.lox");
+    let source = "@é!\n";
+    fs::write(&input, source).expect("write test source");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rlox"))
+        .arg("source")
+        .arg(&input)
+        .output()
+        .expect("run rlox");
+
+    assert!(output.status.success());
+    assert_eq!(output.stdout, source.as_bytes());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn missing_file_reports_a_read_error() {
+    let directory = tempdir().expect("create test directory");
+    let missing = directory.path().join("missing.lox");
+
+    for command in ["source", "tokens"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_rlox"))
+            .arg(command)
+            .arg(&missing)
+            .output()
+            .expect("run rlox");
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 error message");
+        assert!(stderr.starts_with("rlox: could not read '"));
+        assert!(stderr.contains("missing.lox"));
+    }
+}
+
+#[test]
+fn tokens_requires_a_filename() {
+    let output = Command::new(env!("CARGO_BIN_EXE_rlox"))
+        .arg("tokens")
+        .output()
+        .expect("run rlox");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 usage message");
+    assert!(stderr.contains("Usage: rlox tokens <FILE>"));
+}
+```
+
+</details>

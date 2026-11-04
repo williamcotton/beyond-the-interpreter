@@ -146,3 +146,9 @@ served at `/chapter-8/8.2-scan-status/`. Its lexical failure status and separate
 stderr summary have approved text; matching Rust and actual CLI streams,
 statuses and failure/recovery checks pass. The section and inspector are
 accepted.
+
+Section 8.3 is drafted at `src/content/docs/chapter-8/8.3-cli-tests.mdx`,
+served at `/chapter-8/8.3-cli-tests/`. Real-executable integration tests and
+a deliberate stream regression/restoration have approved text. Matching tests
+and the actual dependency/failure/recovery route pass; the section and code
+are accepted, completing Chapter 8.
