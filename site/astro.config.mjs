@@ -69,6 +69,7 @@ export default defineConfig({
           label: 'Chapter 8 · Inspecting Tokens',
           items: [
             { label: '8.1 · Show tokens from a file', link: '/chapter-8/8.1-token-command/' },
+            { label: '8.2 · Report an unsuccessful scan', link: '/chapter-8/8.2-scan-status/' },
           ],
         },
       ],

@@ -140,3 +140,9 @@ served at `/chapter-8/8.1-token-command/`. The token-command text and fixed
 UTF-8 range interactive have approved text. Matching Rust, ordered commands
 and native output-to-fixture comparisons pass; the section and inspector
 are accepted.
+
+Section 8.2 is drafted at `src/content/docs/chapter-8/8.2-scan-status.mdx`,
+served at `/chapter-8/8.2-scan-status/`. Its lexical failure status and separate
+stderr summary have approved text; matching Rust and actual CLI streams,
+statuses and failure/recovery checks pass. The section and inspector are
+accepted.

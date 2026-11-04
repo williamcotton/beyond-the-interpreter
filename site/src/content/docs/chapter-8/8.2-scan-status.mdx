@@ -1,0 +1,364 @@
+---
+title: 8.2 — Report an unsuccessful scan
+slug: chapter-8/8.2-scan-status
+description: Preserve the complete token listing while reporting lexical failure through stderr and the process exit status.
+prev:
+  link: /chapter-8/8.1-token-command/
+  label: 8.1 · Show tokens from a file
+next: false
+---
+
+<p className="book-subtitle">Chapter 8 · Inspecting Tokens</p>
+
+Our token command displays malformed input, but it still reports success.
+If a script runs it before another tool, the script can't tell that scanning
+found an unsupported character or an unfinished string. We need the process
+status to carry that information without losing the listing that explains it.
+
+Start from [Section 8.1](/chapter-8/8.1-token-command/), with your terminal in
+**`rlox/`**. All Rust edits belong to **`rlox/crates/app/src/main.rs`**.
+The scanner already marks lexical errors; this section changes how the app
+reports them.
+
+## Three observations from one command
+
+For an input containing `@é!` and a final newline, we want these stdout rows:
+
+```text title="The complete listing, even after an error"
+Error [0..1) "@"
+Error [1..3) "é"
+Bang [3..4) "!"
+Whitespace [4..5) "\n"
+```
+
+The `!` and newline still matter. Returning as soon as we see `@` would hide
+the rest of the stream. Instead, finish printing the rows, write one summary
+to stderr, then return failure.
+
+```text title="The separate stderr summary"
+rlox: scan contains lexical errors
+```
+
+The listing answers what the scanner found, the summary signals the problem
+to a person, and the exit status lets a calling script react. On the shell
+used in these examples, success is `0` and our failure status is `1`.
+
+## Remember an error without stopping
+
+We need the `Error` variant for a comparison. Replace the syntax import:
+
+```diff title="rlox/crates/app/src/main.rs · syntax import"
+-use rlox_syntax::scan;
++use rlox_syntax::{SyntaxKind, scan};
+```
+
+At the start of the `Command::Tokens` arm, add a mutable flag and set it when
+a token is an error. Keep the rest of the loop unchanged:
+
+```diff title="rlox/crates/app/src/main.rs · start of Tokens arm"
+         Command::Tokens { .. } => {
++            let mut had_error = false;
+             for token in scan(&source) {
++                if token.kind == SyntaxKind::Error {
++                    had_error = true;
++                }
+                 let spelling = token
+```
+
+The flag starts false for each command invocation. Once it becomes true, it
+stays true: a later valid token mustn't erase an earlier failure. The existing
+`PartialEq` derive on `SyntaxKind` allows the equality comparison.
+
+`mut` permits the flag to change; the Rust Book's
+[variables and mutability discussion](https://doc.rust-lang.org/book/ch03-01-variables-and-mutability.html)
+explains that choice. The flag records whether *any* error occurred rather
+than storing a second collection of tokens.
+
+Now add the status decision **after the token loop, still inside the
+`Command::Tokens` arm**:
+
+```diff title="rlox/crates/app/src/main.rs · end of Tokens arm"
+                     spelling
+                 );
+             }
++            if had_error {
++                eprintln!("rlox: scan contains lexical errors");
++                return ExitCode::FAILURE;
++            }
+         }
+     }
+     ExitCode::SUCCESS
+```
+
+`eprintln!` writes the summary to stderr, while our existing `println!` keeps
+token rows on stdout. The Rust Book's
+[stderr chapter](https://doc.rust-lang.org/book/ch12-06-writing-to-stderr-instead-of-stdout.html)
+explains why that separation helps when redirecting output.
+
+We already return `ExitCode::FAILURE` for a read error. Here we reuse it
+after successfully reading a file that contains lexical errors. The
+[ExitCode documentation](https://doc.rust-lang.org/std/process/struct.ExitCode.html)
+describes returning success or failure from `main`. Leave the final
+`ExitCode::SUCCESS`, the read-error handling, the `Source` arm and all existing
+tests unchanged. An empty scan never sets the flag and therefore succeeds.
+
+## Check the streams separately
+
+From **`rlox/`**, run our existing checks:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+They should pass. There are no manifest or dependency edits, so `Cargo.lock`
+should stay unchanged. These tests retain the earlier parser and scanner
+checks; the shell observations below check the new CLI policy. We'll automate
+real-process checks in the next section.
+
+Create **`rlox/scan-error.lox`** containing the opening example:
+
+```sh
+printf '@é!\n' > scan-error.lox
+cargo run --quiet -- tokens scan-error.lox > scan-tokens.out 2> scan-tokens.err
+echo $?
+```
+
+This token command intentionally fails; run these lines in your interactive
+shell, which should continue to `echo`. Expect `1`. Check `$?` immediately:
+another command would replace the status you're trying to observe.
+
+`>` writes stdout to **`scan-tokens.out`**; `2>` writes stderr to
+**`scan-tokens.err`**. They are scratch output files and are overwritten each
+time that redirected command runs. Inspect them:
+
+```sh
+cat scan-tokens.out
+cat scan-tokens.err
+```
+
+The first file should contain exactly the four opening rows. The second
+should contain exactly the one-line summary. In particular, the `Bang` after
+the two errors must still be present, and the summary mustn't become a token
+row.
+
+The earlier `source` command has a different question to answer: can it read
+and display the file? Try it on this same file:
+
+```sh
+cargo run --quiet -- source scan-error.lox
+echo $?
+```
+
+Expect `@é!` followed by its newline, then status `0`. It doesn't scan the
+file, so Lox's lexical rules don't affect this command's success.
+
+## An unfinished string is also a failed scan
+
+Create **`rlox/unfinished.lox`** with an opening quote, `é`, and a newline,
+but no closing quote:
+
+```sh
+printf '"é\n' > unfinished.lox
+cargo run --quiet -- tokens unfinished.lox
+echo $?
+```
+
+Expect this single stdout row:
+
+```text title="The existing string error range"
+Error [0..4) "\"é\n"
+```
+
+Stderr should contain the same summary, and the status should be `1`.
+The row covers the opening quote, the two bytes of `é`, and the newline.
+It remains one error because strings can span lines. We didn't need a new
+scanner rule or a special CLI case: both an unsupported character and this
+unfinished string already have kind `Error`.
+
+When both streams go to a terminal, their displayed order isn't the contract.
+The rows belong to stdout and the summary to stderr; redirect them separately
+as above when checking exact contents.
+
+## Empty input and recovery
+
+Create **`rlox/empty.lox`** and inspect it:
+
+```sh
+printf '' > empty.lox
+cargo run --quiet -- tokens empty.lox
+echo $?
+```
+
+Expect no rows, no stderr summary and status `0`. There is no token to mark
+as an error.
+
+Now repair **`scan-error.lox`**, replacing its contents with valid tokens:
+
+```sh
+printf 'print 1;\n' > scan-error.lox
+cargo run --quiet -- tokens scan-error.lox
+echo $?
+```
+
+Expect:
+
+```text title="The repaired file's stdout"
+Print [0..5) "print"
+Whitespace [5..6) " "
+Number [6..7) "1"
+Semicolon [7..8) ";"
+Whitespace [8..9) "\n"
+```
+
+There should be no stderr summary, and `echo` should print `0`. The flag is
+local to each invocation; a failed earlier scan can't affect this one.
+Your saved scratch outputs still describe the earlier failure until you
+rerun the redirected command. Once you have finished inspecting those two
+scratch outputs, remove them:
+
+```sh
+rm scan-tokens.out scan-tokens.err
+```
+
+Keep the three `.lox` inputs as small examples of valid, empty and unfinished
+source.
+
+Success here means the scanner found no lexical errors. It doesn't prove the
+tokens form a valid Lox program; checking grammar will come with the parser.
+The command now provides both a useful full listing and a status that scripts
+can act on.
+
+<details>
+<summary>Complete resulting app entry point and tests</summary>
+
+```rust title="rlox/crates/app/src/main.rs · complete resulting file"
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+use rlox_syntax::{SyntaxKind, scan};
+
+#[derive(Parser)]
+#[command(name = "rlox", about = "Inspect Lox source files")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Display a file's source text.
+    Source {
+        /// File whose text should be displayed.
+        file: String,
+    },
+    /// Display a file's tokens and source ranges.
+    Tokens {
+        /// File whose tokens should be displayed.
+        file: String,
+    },
+}
+
+fn main() -> ExitCode {
+    let command = Cli::parse().command;
+    let filename = match &command {
+        Command::Source { file } | Command::Tokens { file } => file,
+    };
+    let source = match std::fs::read_to_string(filename) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("rlox: could not read '{filename}': {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match command {
+        Command::Source { .. } => print!("{source}"),
+        Command::Tokens { .. } => {
+            let mut had_error = false;
+            for token in scan(&source) {
+                if token.kind == SyntaxKind::Error {
+                    had_error = true;
+                }
+                let spelling = token
+                    .range
+                    .slice(&source)
+                    .expect("scanner ranges are valid");
+                println!(
+                    "{:?} [{}..{}) {:?}",
+                    token.kind,
+                    token.range.start().0,
+                    token.range.end().0,
+                    spelling
+                );
+            }
+            if had_error {
+                eprintln!("rlox: scan contains lexical errors");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn accepts_source_command() {
+        let cli = Cli::try_parse_from(["rlox", "source", "hello.lox"])
+            .expect("source with a filename should parse");
+
+        match cli.command {
+            Command::Source { file } => assert_eq!(file, "hello.lox"),
+            Command::Tokens { .. } => panic!("expected the source command"),
+        }
+    }
+
+    #[test]
+    fn requires_known_command() {
+        assert!(Cli::try_parse_from(["rlox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "hello.lox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "unknown", "hello.lox"]).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_filename() {
+        for command in ["source", "tokens"] {
+            assert!(Cli::try_parse_from(["rlox", command]).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_extra_filenames() {
+        for command in ["source", "tokens"] {
+            assert!(Cli::try_parse_from(["rlox", command, "hello.lox", "other.lox"]).is_err());
+        }
+    }
+
+    #[test]
+    fn help_is_a_successful_request() {
+        let help = Cli::try_parse_from(["rlox", "--help"])
+            .err()
+            .expect("help should stop parsing");
+
+        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+        assert_eq!(help.exit_code(), 0);
+    }
+
+    #[test]
+    fn accepts_tokens_command() {
+        let cli = Cli::try_parse_from(["rlox", "tokens", "hello.lox"])
+            .expect("tokens with a filename should parse");
+
+        match cli.command {
+            Command::Tokens { file } => assert_eq!(file, "hello.lox"),
+            Command::Source { .. } => panic!("expected the tokens command"),
+        }
+    }
+}
+```
+
+</details>
