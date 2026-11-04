@@ -88,6 +88,7 @@ export default defineConfig({
           items: [
             { label: '10.1 · Give expressions a recursive shape', link: '/chapter-10/10.1-recursive-expressions/' },
             { label: '10.2 · Connect operands with operators', link: '/chapter-10/10.2-expression-operators/' },
+            { label: '10.3 · Print the tree without consuming it', link: '/chapter-10/10.3-expression-printer/' },
           ],
         },
       ],

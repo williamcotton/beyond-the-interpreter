@@ -197,3 +197,8 @@ served at `/chapter-10/10.2-expression-operators/`. Unary/binary arithmetic
 nodes, operator types and owned subtrees are introduced through incremental
 example edits and a labeled tree. Matching expression types and both example checkpoints pass locally, along
 with workspace formatting, Clippy and tests. The combined endpoint is accepted.
+
+Section 10.3 is drafted at `src/content/docs/chapter-10/10.3-expression-printer.mdx`,
+served at `/chapter-10/10.3-expression-printer/`. Its borrowed printer, example and four formatting/ownership tests match the
+manuscript and pass local workspace checks. The section and code are accepted,
+completing Chapter 10.

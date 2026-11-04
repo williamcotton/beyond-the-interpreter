@@ -32,4 +32,7 @@ fn main() {
         right: Box::new(Expr::Number(3.0)),
     };
     println!("arithmetic: {product:#?}");
+
+    println!("prefix: {}", product.to_prefix());
+    println!("prefix again: {}", product.to_prefix());
 }

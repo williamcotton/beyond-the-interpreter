@@ -1,0 +1,457 @@
+---
+title: 10.3 — Print the tree without consuming it
+slug: chapter-10/10.3-expression-printer
+description: Borrow an expression tree, recursively format its structure, and check its grouping and operand order.
+prev:
+  link: /chapter-10/10.2-expression-operators/
+  label: 10.2 · Connect operands with operators
+next: false
+---
+
+<p className="book-subtitle">Chapter 10 · Representing Expressions</p>
+
+Our mixed expression fits on one line of Lox, but its diagnostic Rust view
+fills several lines. We can see all the fields; it takes more work to read
+the expression's shape. Let's give that shape a compact notation:
+
+```text title="A compact view of our existing tree"
+(* (- (group (+ 1 2))) 3)
+```
+
+Each parenthesized form starts with its operator, followed by its operands.
+`(+ 1 2)` describes the addition; `(group ...)` preserves the explicit
+grouping node; `(- ...)` describes negation. The outer `*` has two operands:
+that entire negation and the number `3`.
+
+This is **prefix notation**, chosen to show the tree without needing rules
+for operator precedence. [Crafting Interpreters uses a parenthesized tree printer](https://craftinginterpreters.com/representing-code.html#a-not-very-pretty-printer)
+for a similar inspection task. We'll implement ours with a match over our
+Rust enum.
+
+Start from [Section 10.2](/chapter-10/10.2-expression-operators/). Keep your
+terminal in the **Rust workspace directory**, containing `Cargo.toml` and
+`crates/`. Our existing example already builds `-(1 + 2) * 3`. We'll add a
+method to inspect it and unit tests for the resulting strings.
+
+## Borrow the tree we want to inspect
+
+A printer only needs to read the tree. It shouldn't take ownership of the
+root or move its children out. Give the operation this signature:
+
+```rust title="The printer's method signature · explained below, not a separate edit"
+pub fn to_prefix(&self) -> String
+```
+
+`&self` borrows the expression. The caller keeps owning it, and the method
+returns a new owned `String` containing the result. We'll be able to call
+`product.to_prefix()` twice on the same value.
+
+The method goes inside `impl Expr`. There, `Self` means `Expr`; matching
+`Self::Grouping(child)` is another way to name that variant. Since we
+match a shared reference, the pattern bindings borrow the fields too.
+For example, `child` is a reference to the existing box, not a box removed
+from its parent. The Rust Book connects these ideas in
+[method syntax](https://doc.rust-lang.org/book/ch05-03-method-syntax.html#method-syntax)
+and [references and borrowing](https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html).
+
+Append this complete block **after the `BinaryOp` definition**, separated by
+a blank line, in **`rlox/crates/syntax/src/expr.rs`**:
+
+```rust title="rlox/crates/syntax/src/expr.rs · append the borrowed printer"
+impl Expr {
+    pub fn to_prefix(&self) -> String {
+        match self {
+            Self::Number(value) => value.to_string(),
+            Self::Grouping(child) => format!("(group {})", child.to_prefix()),
+            Self::Unary { op, right } => {
+                let symbol = match op {
+                    UnaryOp::Negate => "-",
+                };
+                format!("({symbol} {})", right.to_prefix())
+            }
+            Self::Binary { left, op, right } => {
+                let symbol = match op {
+                    BinaryOp::Add => "+",
+                    BinaryOp::Subtract => "-",
+                    BinaryOp::Multiply => "*",
+                    BinaryOp::Divide => "/",
+                };
+                format!("({symbol} {} {})", left.to_prefix(), right.to_prefix())
+            }
+        }
+    }
+}
+```
+
+Each arm returns a `String`. A number is the **base case**: it has no
+children, so `to_string()` supplies its text. A grouping asks its child for
+a string, then wraps that string with `(group ...)`. Unary and binary nodes
+do the same with one or two operands.
+
+The method calls inside those arms are **recursive calls**: printing an
+expression requires printing its smaller child expressions. A call on a
+borrowed `Box<Expr>` can reach the method on `Expr` through Rust's automatic
+dereferencing for method calls. We don't unwrap the box or move its value.
+
+The nested operator matches choose a symbol. Both `UnaryOp::Negate` and
+`BinaryOp::Subtract` print `-`, but their containing nodes determine whether
+there is one operand or two. There is no catch-all arm: if we add another
+expression or operator variant later, Rust will require us to decide how
+it prints. The Rust Book explains this
+[exhaustiveness requirement](https://doc.rust-lang.org/book/ch06-02-match.html#matches-are-exhaustive).
+
+`format!` uses the familiar formatting syntax from `println!`, but returns
+a string instead of writing to the terminal. In the binary arm, the first
+`{}` receives the left child's string and the second receives the right
+child's. Their placement preserves operand order. See the standard library's
+[`format!` reference](https://doc.rust-lang.org/std/macro.format.html).
+
+With the method in place, check the crate:
+
+```sh
+cargo check -p rlox-syntax
+```
+
+It should succeed. The expression types and their ownership have stayed the
+same; we have added an operation that borrows them.
+
+## Follow the strings back up the tree
+
+For our mixed example, every node returns the fragment shown on its line:
+
+```text title="Subtree results returned by to_prefix"
+Multiply → (* (- (group (+ 1 2))) 3)
+├─ left: Negate → (- (group (+ 1 2)))
+│        └─ right: Grouping → (group (+ 1 2))
+│                  └─ child: Add → (+ 1 2)
+│                            ├─ left: Number → 1
+│                            └─ right: Number → 2
+└─ right: Number → 3
+```
+
+A call begins at the root and descends when it needs a child's string.
+Numbers return immediately. The addition can then assemble `(+ 1 2)`;
+the grouping wraps it, the negation wraps that, and the multiplication
+combines the left fragment with `3`. Each parent uses the same operation on
+its children, without needing to know how many levels lie below them.
+
+The numeric text follows Rust's normal `f64` display formatting. That is
+why `Expr::Number(123.0)` prints `123`, while `Expr::Number(12.5)` prints
+`12.5`. Our tree holds numeric values, not the original token spellings.
+Printing it won't recover whether a number was written as `123`, `123.0`
+or with leading zeroes. The scanner and source text remain the place to
+find that spelling.
+
+Inside **`rlox/crates/syntax/examples/expression_shape.rs`**, keep the
+existing code. After `println!("arithmetic: {product:#?}");`, before the
+closing brace of `main`, leave a blank line and append:
+
+```rust title="rlox/crates/syntax/examples/expression_shape.rs · append prefix inspection"
+    println!("prefix: {}", product.to_prefix());
+    println!("prefix again: {}", product.to_prefix());
+```
+
+No import change is needed: we already have the `Expr` value and its public
+method. Run the example:
+
+```sh
+cargo run -p rlox-syntax --example expression_shape
+```
+
+The existing diagnostic output should remain unchanged. Its final two
+additional lines should be:
+
+```text title="Additional prefix output"
+prefix: (* (- (group (+ 1 2))) 3)
+prefix again: (* (- (group (+ 1 2))) 3)
+```
+
+The second call uses the same `product` binding. We still own the tree after
+the first call; no clone or reconstruction was needed. The output records
+the operations and their structure, without evaluating the arithmetic.
+
+## Check the printer's decisions
+
+Until now our example has shown trees we constructed directly. The printer
+adds behavior we can test: symbols, grouping markers, spacing and operand
+order must agree with the tree. Put these tests beside that behavior.
+
+At the end of **`expr.rs`**, after the `impl Expr` block, leave a blank line
+and append this complete initial test module:
+
+```rust title="rlox/crates/syntax/src/expr.rs · append number, grouping and unary tests"
+#[cfg(test)]
+mod tests {
+    use super::{BinaryOp, Expr, UnaryOp};
+
+    #[test]
+    fn prints_numbers_and_nested_groups() {
+        assert_eq!(Expr::Number(12.5).to_prefix(), "12.5");
+
+        let nested = Expr::Grouping(Box::new(Expr::Grouping(Box::new(Expr::Number(123.0)))));
+        assert_eq!(nested.to_prefix(), "(group (group 123))");
+    }
+
+    #[test]
+    fn prints_unary_negation() {
+        let expr = Expr::Unary {
+            op: UnaryOp::Negate,
+            right: Box::new(Expr::Number(123.0)),
+        };
+        assert_eq!(expr.to_prefix(), "(- 123)");
+    }
+}
+```
+
+The first test covers the number base case and two nested grouping nodes.
+The second checks that a unary node emits its symbol before its operand.
+These assertions check the formatted result rather than repeating the
+constructors as expected values.
+
+Inside that `tests` module, **before its final closing brace**, leave a
+blank line and append:
+
+```rust title="rlox/crates/syntax/src/expr.rs · append binary output cases"
+    #[test]
+    fn prints_binary_symbols_and_operand_order() {
+        for (op, expected) in [
+            (BinaryOp::Add, "(+ 8 2)"),
+            (BinaryOp::Subtract, "(- 8 2)"),
+            (BinaryOp::Multiply, "(* 8 2)"),
+            (BinaryOp::Divide, "(/ 8 2)"),
+        ] {
+            let expr = Expr::Binary {
+                left: Box::new(Expr::Number(8.0)),
+                op,
+                right: Box::new(Expr::Number(2.0)),
+            };
+            assert_eq!(expr.to_prefix(), expected);
+        }
+    }
+```
+
+The loop gives every binary operator an independently written expected
+string. We deliberately use different left and right numbers, so swapping
+the operands would change the expected output. Subtraction and division
+make the significance of that order especially clear. `op` in the
+constructor is Rust's field shorthand for `op: op`; each loop iteration
+moves its chosen operator into the expression it constructs.
+
+Finally, append this test **inside the same module**, after the binary test
+and before the closing brace, separated by a blank line:
+
+```rust title="rlox/crates/syntax/src/expr.rs · append repeated mixed-tree inspection"
+    #[test]
+    fn printing_preserves_the_mixed_tree() {
+        let sum = Expr::Binary {
+            left: Box::new(Expr::Number(1.0)),
+            op: BinaryOp::Add,
+            right: Box::new(Expr::Number(2.0)),
+        };
+        let grouped_sum = Expr::Grouping(Box::new(sum));
+        let negative_sum = Expr::Unary {
+            op: UnaryOp::Negate,
+            right: Box::new(grouped_sum),
+        };
+        let product = Expr::Binary {
+            left: Box::new(negative_sum),
+            op: BinaryOp::Multiply,
+            right: Box::new(Expr::Number(3.0)),
+        };
+
+        let expected = "(* (- (group (+ 1 2))) 3)";
+        assert_eq!(product.to_prefix(), expected);
+        assert_eq!(product.to_prefix(), expected);
+    }
+```
+
+This combines all four expression shapes. Calling the method a second time
+checks the intended ownership contract too: a method that took `self`
+instead of `&self` would move `product` on the first call, and the repeated
+use would fail to compile.
+
+Run just the new expression-module tests first:
+
+```sh
+cargo test -p rlox-syntax expr::tests
+```
+
+All four named tests should pass. Then finish with the workspace checks:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+The existing scanner, source-coordinate and CLI tests should continue to
+pass alongside the printer tests. We have reached this chapter's checkpoint:
+small arithmetic expressions can be represented and printed. The next
+chapter will turn source tokens into these trees with a parser.
+
+<details>
+<summary>Complete resulting expression module</summary>
+
+```rust title="rlox/crates/syntax/src/expr.rs · complete resulting file"
+#[derive(Debug)]
+pub enum Expr {
+    Number(f64),
+    Grouping(Box<Expr>),
+    Unary {
+        op: UnaryOp,
+        right: Box<Expr>,
+    },
+    Binary {
+        left: Box<Expr>,
+        op: BinaryOp,
+        right: Box<Expr>,
+    },
+}
+
+#[derive(Debug)]
+pub enum UnaryOp {
+    Negate,
+}
+
+#[derive(Debug)]
+pub enum BinaryOp {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+
+impl Expr {
+    pub fn to_prefix(&self) -> String {
+        match self {
+            Self::Number(value) => value.to_string(),
+            Self::Grouping(child) => format!("(group {})", child.to_prefix()),
+            Self::Unary { op, right } => {
+                let symbol = match op {
+                    UnaryOp::Negate => "-",
+                };
+                format!("({symbol} {})", right.to_prefix())
+            }
+            Self::Binary { left, op, right } => {
+                let symbol = match op {
+                    BinaryOp::Add => "+",
+                    BinaryOp::Subtract => "-",
+                    BinaryOp::Multiply => "*",
+                    BinaryOp::Divide => "/",
+                };
+                format!("({symbol} {} {})", left.to_prefix(), right.to_prefix())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BinaryOp, Expr, UnaryOp};
+
+    #[test]
+    fn prints_numbers_and_nested_groups() {
+        assert_eq!(Expr::Number(12.5).to_prefix(), "12.5");
+
+        let nested = Expr::Grouping(Box::new(Expr::Grouping(Box::new(Expr::Number(123.0)))));
+        assert_eq!(nested.to_prefix(), "(group (group 123))");
+    }
+
+    #[test]
+    fn prints_unary_negation() {
+        let expr = Expr::Unary {
+            op: UnaryOp::Negate,
+            right: Box::new(Expr::Number(123.0)),
+        };
+        assert_eq!(expr.to_prefix(), "(- 123)");
+    }
+
+    #[test]
+    fn prints_binary_symbols_and_operand_order() {
+        for (op, expected) in [
+            (BinaryOp::Add, "(+ 8 2)"),
+            (BinaryOp::Subtract, "(- 8 2)"),
+            (BinaryOp::Multiply, "(* 8 2)"),
+            (BinaryOp::Divide, "(/ 8 2)"),
+        ] {
+            let expr = Expr::Binary {
+                left: Box::new(Expr::Number(8.0)),
+                op,
+                right: Box::new(Expr::Number(2.0)),
+            };
+            assert_eq!(expr.to_prefix(), expected);
+        }
+    }
+
+    #[test]
+    fn printing_preserves_the_mixed_tree() {
+        let sum = Expr::Binary {
+            left: Box::new(Expr::Number(1.0)),
+            op: BinaryOp::Add,
+            right: Box::new(Expr::Number(2.0)),
+        };
+        let grouped_sum = Expr::Grouping(Box::new(sum));
+        let negative_sum = Expr::Unary {
+            op: UnaryOp::Negate,
+            right: Box::new(grouped_sum),
+        };
+        let product = Expr::Binary {
+            left: Box::new(negative_sum),
+            op: BinaryOp::Multiply,
+            right: Box::new(Expr::Number(3.0)),
+        };
+
+        let expected = "(* (- (group (+ 1 2))) 3)";
+        assert_eq!(product.to_prefix(), expected);
+        assert_eq!(product.to_prefix(), expected);
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting expression example</summary>
+
+```rust title="rlox/crates/syntax/examples/expression_shape.rs · complete resulting file"
+use rlox_syntax::expr::{BinaryOp, Expr, UnaryOp};
+
+fn main() {
+    let number = Expr::Number(123.0);
+    println!("number: {number:?}");
+
+    let grouped = Expr::Grouping(Box::new(number));
+    println!("grouped: {grouped:?}");
+
+    let nested = Expr::Grouping(Box::new(grouped));
+    println!("nested: {nested:?}");
+
+    let negated = Expr::Unary {
+        op: UnaryOp::Negate,
+        right: Box::new(Expr::Number(123.0)),
+    };
+    println!("negated: {negated:?}");
+
+    let sum = Expr::Binary {
+        left: Box::new(Expr::Number(1.0)),
+        op: BinaryOp::Add,
+        right: Box::new(Expr::Number(2.0)),
+    };
+    let grouped_sum = Expr::Grouping(Box::new(sum));
+    let negative_sum = Expr::Unary {
+        op: UnaryOp::Negate,
+        right: Box::new(grouped_sum),
+    };
+    let product = Expr::Binary {
+        left: Box::new(negative_sum),
+        op: BinaryOp::Multiply,
+        right: Box::new(Expr::Number(3.0)),
+    };
+    println!("arithmetic: {product:#?}");
+
+    println!("prefix: {}", product.to_prefix());
+    println!("prefix again: {}", product.to_prefix());
+}
+```
+
+</details>
