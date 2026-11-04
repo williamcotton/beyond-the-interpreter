@@ -178,3 +178,10 @@ isolated installed-extension tests have approved text, with a scoped dependency
 patch and archive README casing corrected during implementation. Actual packaging,
 archive inspection and both editor modes pass; the section and extension are
 accepted.
+
+Section 9.5 is drafted at `src/content/docs/chapter-9/9.5-editor-ci.mdx`,
+served at `/chapter-9/9.5-editor-ci/`. Its approved instructions now match an independent extension job in the root
+workflow, using rlox/editors/vscode for shell commands and the lockfile cache
+path. Locked installation, TypeScript/grammar checks, packaging and both local
+VS Code modes pass. Combined review and hosted Ubuntu/Xvfb verification remain
+pending; no push is authorized.

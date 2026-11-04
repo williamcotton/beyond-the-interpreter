@@ -1,0 +1,321 @@
+---
+title: 9.5 — Run editor checks in CI
+slug: chapter-9/9.5-editor-ci
+description: Add a locked extension build, grammar, packaging and real-editor test job beside the Rust checks.
+prev:
+  link: /chapter-9/9.4-local-vsix/
+  label: 9.4 · Install the extension we packaged
+next: false
+---
+
+<p className="book-subtitle">Chapter 9 · Giving Lox an Editor</p>
+
+Our extension tests pass locally. A checkout on another machine also needs
+to install the locked dependencies, build the archive and run VS Code with
+the right display environment. Let's give those steps a job in the same
+workflow that checks our Rust workspace.
+
+Start from [Section 9.4](/chapter-9/9.4-local-vsix/). Work from your
+**Rust repository root**, the directory containing the workspace `Cargo.toml`
+and the `.github/workflows/ci.yml` created in
+[Section 4.4](/chapter-4/4.4-ci/). The extension lives at `editors/vscode/`
+relative to that root. This section edits only the workflow.
+
+## Give the extension its own job
+
+Open **`.github/workflows/ci.yml`**. Change the workflow's display name:
+
+```diff title=".github/workflows/ci.yml · workflow name"
+-name: Rust CI
++name: Project CI
+```
+
+Keep the existing `checks` job, push/pull-request triggers and read-only
+permissions. Add a second job at the end of the file, **inside `jobs`, beside
+`checks`**, beginning with:
+
+```yaml title=".github/workflows/ci.yml · append extension job under jobs"
+  extension:
+    name: Extension checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26.0.0'
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+```
+
+The `extension` job runs independently of the Rust job. A TypeScript or
+editor failure shouldn't prevent us from seeing whether the Rust checks
+passed. `timeout-minutes` bounds the job if a download or editor process
+fails to finish.
+
+We reuse the checkout action from 4.4. The Node setup action uses the
+verified [v7.1.0 release](https://github.com/actions/setup-node/releases/tag/v7.1.0)
+by its full commit ID. Its `node-version` chooses Node 26.0.0, the version
+used for our local extension route; it doesn't change our extension's minimum
+engine declaration.
+
+There are two different path rules here. `defaults.run.working-directory`
+sets where the job's shell commands execute. The Node action's
+`cache-dependency-path` is an action input, relative to the checkout root,
+so it includes `editors/vscode/` as well. A shell default doesn't change how
+action inputs resolve paths.
+
+The [setup-node documentation](https://github.com/actions/setup-node)
+explains its npm cache support. It caches downloaded package data, not a
+ready-made `node_modules` directory. Every job still installs dependencies
+from the lockfile.
+
+## Install, check and package
+
+Append these steps **after Set up Node**, at the same indentation as the
+existing steps in this new job:
+
+```yaml title=".github/workflows/ci.yml · append extension build steps"
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Check TypeScript
+        run: npm run check
+
+      - name: Test grammar scopes
+        run: npm test
+
+      - name: Package the extension
+        run: npm run package
+
+      - name: Inspect the archive
+        run: unzip -l rlox-0.1.0.vsix
+```
+
+`npm ci` is the clean-checkout install: it uses the existing lockfile and
+fails if it disagrees with the manifest. Commit the extension lockfile,
+including 9.4's scoped dependency override, so the runner gets the toolchain
+we tested. The [npm ci reference](https://docs.npmjs.com/cli/v11/commands/npm-ci)
+describes this locked installation behavior.
+
+The next steps reuse our existing scripts. `check` checks TypeScript,
+`test` builds and checks actual grammar scopes, and `package` creates the
+local VSIX. The archive must exist before the installed test runs.
+
+The inspection step lists the archive actually built on this runner. Its
+four extension payload entries should match 9.4, including lowercase
+`extension/readme.md`, plus VSIX metadata. The filename includes the current
+extension version; update this step alongside the package and installed-test
+paths when intentionally changing that version.
+
+## Give Electron a display
+
+Append these final steps **after Inspect the archive**:
+
+```yaml title=".github/workflows/ci.yml · append real-editor steps"
+      - name: Check display tools
+        run: |
+          command -v xvfb-run
+          command -v xauth
+
+      - name: Test the development extension
+        run: xvfb-run -a npm run test:editor
+
+      - name: Test the installed VSIX
+        run: xvfb-run -a npm run test:installed
+```
+
+The real editor is still an Electron desktop process, even when assertions
+are made through APIs. GitHub's Ubuntu runner doesn't provide an interactive
+desktop session for our test. Xvfb supplies a virtual display; `xvfb-run -a`
+starts one on an available display number for the wrapped command.
+
+The [VS Code CI guide](https://code.visualstudio.com/api/working-with-extensions/continuous-integration)
+uses this approach for Linux integration tests. The selected
+[Ubuntu 24.04 runner image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
+includes Xvfb; the explicit tool check makes a missing display prerequisite
+visible before launching the editor.
+
+Both host modes still use the disposable profiles from 9.4. The development
+mode checks the checkout; the installed mode checks the VSIX from the package
+step. Each invocation gets its own profile. The downloaded VS Code build is
+reused between them within the job, while its fresh profile is removed after
+each run. The npm cache doesn't replace or prove either editor test.
+
+No screen capture is needed for these checks: the assertions inspect the
+registered extension, document text and editing behavior. Theme colors are
+still something you can inspect yourself with 9.3's development launch.
+
+## Match your repository layout
+
+The workflow above assumes the Rust workspace is your repository root. Keep
+`.github/workflows/ci.yml` at the **Git repository root**, where GitHub looks
+for workflows.
+
+If you use a larger repository with the Rust workspace under `rlox/`, as this
+book's authoring repository does, keep the Rust job's existing `rlox` working
+directory and prefix the two new extension paths:
+
+```yaml title="Larger repository · extension job path adjustments"
+    defaults:
+      run:
+        working-directory: rlox/editors/vscode
+```
+
+In the Node setup action, use:
+
+```yaml title="Larger repository · Node action cache input"
+          cache-dependency-path: rlox/editors/vscode/package-lock.json
+```
+
+Those adjustments describe the same extension folder from the larger checkout
+root. They don't require a second workflow under `rlox/.github/` or moving
+the reader's workspace into a new parent repository.
+
+## Check the local route before a hosted run
+
+From **your Rust workspace directory**, enter the extension folder and try
+the locked install used by CI:
+
+```sh
+cd editors/vscode
+npm ci
+npm run check
+npm test
+npm run package
+unzip -l rlox-0.1.0.vsix
+```
+
+On your normal desktop session, run both host modes:
+
+```sh
+npm run test:editor
+npm run test:installed
+```
+
+On headless Linux, use the two `xvfb-run -a` commands from the workflow
+instead. Expect the same grammar tests, archive contents and editor messages
+as 9.4, with successful exit statuses. No manifest, lockfile or language-file
+edit is required for this section.
+
+These commands check the extension route on your machine. They don't run
+GitHub's checkout, cache or Ubuntu environment. A local pass is useful
+preflight evidence, not a hosted CI result.
+
+## Read the result for the right revision
+
+When this workflow revision reaches your GitHub repository through a push or
+pull request, open **Actions → Project CI** and select the run for that
+commit. Expect two jobs: **Workspace checks** and **Extension checks**.
+
+For a failure, open the failed step's log. A dependency install failure is
+different from a grammar assertion, an editor startup problem, or a package
+that fails installed-mode checks. The separate steps make that distinction
+visible. A skipped later step hasn't passed.
+
+Use the commit shown on the run to confirm you're looking at the updated
+workflow, rather than an older green run containing only Rust checks. The
+Linux job establishes evidence for that environment; it doesn't establish
+Windows or macOS compatibility by itself. Hosted runner images can also
+receive updates within the selected Ubuntu release.
+
+This job builds and tests a local package on the runner. It doesn't publish
+the extension or deploy the book. Once its run passes, we have a repeatable
+check of the lexical toolchain and the editor extension together. The next
+chapter moves back into Rust to represent expressions.
+
+<details>
+<summary>Complete resulting workflow · Rust workspace as repository root</summary>
+
+```yaml title=".github/workflows/ci.yml · complete resulting file"
+name: Project CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Workspace checks
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace
+
+  extension:
+    name: Extension checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26.0.0'
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Check TypeScript
+        run: npm run check
+
+      - name: Test grammar scopes
+        run: npm test
+
+      - name: Package the extension
+        run: npm run package
+
+      - name: Inspect the archive
+        run: unzip -l rlox-0.1.0.vsix
+
+      - name: Check display tools
+        run: |
+          command -v xvfb-run
+          command -v xauth
+
+      - name: Test the development extension
+        run: xvfb-run -a npm run test:editor
+
+      - name: Test the installed VSIX
+        run: xvfb-run -a npm run test:installed
+```
+
+</details>

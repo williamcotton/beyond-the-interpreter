@@ -80,6 +80,7 @@ export default defineConfig({
             { label: '9.2 · Make Lox comfortable to edit', link: '/chapter-9/9.2-editing-rules/' },
             { label: '9.3 · Give source its lexical colors', link: '/chapter-9/9.3-syntax-highlighting/' },
             { label: '9.4 · Install the extension we packaged', link: '/chapter-9/9.4-local-vsix/' },
+            { label: '9.5 · Run editor checks in CI', link: '/chapter-9/9.5-editor-ci/' },
           ],
         },
       ],
