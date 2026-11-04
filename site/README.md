@@ -207,3 +207,8 @@ Section 11.1 is drafted at `src/content/docs/chapter-11/11.1-parse-number.mdx`,
 served at `/chapter-11/11.1-parse-number/`. Its number parser, ranged errors, example and five focused tests match the
 manuscript and are accepted. Formatting, Clippy and all 55 workspace tests
 pass locally.
+
+Section 11.2 is drafted at `src/content/docs/chapter-11/11.2-parse-grouping.mdx`,
+served at `/chapter-11/11.2-parse-grouping/`. Its private cursor, recursive grouping, delimiter errors and 64-group policy
+match the reader implementation and are accepted. Both checkpoints, example
+output, formatting, Clippy and all 60 workspace tests pass locally.
