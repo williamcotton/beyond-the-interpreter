@@ -1,0 +1,388 @@
+---
+title: 9.2 — Make Lox comfortable to edit
+slug: chapter-9/9.2-editing-rules
+description: Configure comments, pairs, and brace indentation, then check actual edits inside VS Code.
+prev:
+  link: /chapter-9/9.1-language-registration/
+  label: 9.1 · Open Lox in VS Code
+next: false
+---
+
+<p className="book-subtitle">Chapter 9 · Giving Lox an Editor</p>
+
+VS Code recognizes our `.lox` file, but it still needs Lox-specific editing
+rules. What should Toggle Line Comment insert? Which characters form a pair?
+Should pressing Enter after `{` indent the next line?
+
+We'll answer those questions through configuration, then extend our existing
+real-editor test to perform the edits and check the resulting text.
+
+Start from [Section 9.1](/chapter-9/9.1-language-registration/), with your
+terminal in **`rlox/editors/vscode/`**. Keep its manifest, fixture and test
+launcher. We'll add one configuration file, connect it to the manifest, and
+extend **`test/editor.ts`**. Dependencies and Rust remain unchanged.
+
+## Describe the editing conventions
+
+Create **`language-configuration.json`** beside the extension's `package.json`:
+
+```json title="rlox/editors/vscode/language-configuration.json"
+{
+  "comments": {
+    "lineComment": "//"
+  },
+  "brackets": [
+    [
+      "{",
+      "}"
+    ],
+    [
+      "(",
+      ")"
+    ]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "{",
+      "close": "}"
+    },
+    {
+      "open": "(",
+      "close": ")"
+    },
+    {
+      "open": "\"",
+      "close": "\""
+    }
+  ],
+  "surroundingPairs": [
+    [
+      "{",
+      "}"
+    ],
+    [
+      "(",
+      ")"
+    ],
+    [
+      "\"",
+      "\""
+    ]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "^.*\\{[^}]*$",
+    "decreaseIndentPattern": "^\\s*\\}"
+  }
+}
+```
+
+`comments.lineComment` tells VS Code that toggling a line comment uses `//`.
+There is no block-comment convention to register for Lox.
+
+`brackets` describes matching braces and parentheses. `autoClosingPairs`
+tells the editor what to insert after an opening character; `surroundingPairs`
+provides pairs for wrapping selected text. Quotes are useful for insertion
+and wrapping, but aren't nested brackets.
+
+For now these pair declarations have no string/comment exclusions. We don't
+yet have the grammar scopes that distinguish those contexts. We'll add that
+connection alongside highlighting in 9.3; today's checks use ordinary Lox
+code and an empty document.
+
+The [VS Code language configuration guide](https://code.visualstudio.com/api/language-extensions/language-configuration-guide)
+explains how these contributions interact with editor settings. A pair rule
+makes an action available; a reader's settings can still control whether the
+editor performs it automatically.
+
+## Keep indentation small
+
+The two indentation patterns are line-based hints. `increaseIndentPattern`
+matches a line containing an opening brace with no closing brace after it.
+`decreaseIndentPattern` recognizes a closing brace after optional leading
+whitespace.
+
+These are regex strings inside JSON, so a regex backslash is written twice.
+For example, `"^\\s*\\}"` supplies `^\s*\}` to the regex engine: optional
+leading whitespace followed by a literal closing brace.
+
+The rules don't parse Lox. A brace in a string or comment can fool a simple
+line pattern; this is a lightweight editing heuristic, not a formatter. We
+can already use it for the common case of pressing Enter after a block opens.
+
+## Connect the file to Lox
+
+Inside **`package.json`**, add `configuration` to the existing language entry.
+The path is relative to the extension root:
+
+```diff title="rlox/editors/vscode/package.json · language contribution"
+         "extensions": [
+           ".lox"
+-        ]
++        ],
++        "configuration": "./language-configuration.json"
+```
+
+Keep the other manifest fields unchanged. The comma after `extensions` now
+separates it from the new property. VS Code loads this editing configuration
+for documents with language ID `lox`.
+
+## Set up repeatable editor actions
+
+In **`test/editor.ts`**, retain the imports and the existing recognition test.
+Insert the following **inside `run`, immediately after
+`console.log('EDITOR CHECK: hello.lox opened as Lox');`**, before the function's
+closing brace:
+
+```ts title="rlox/editors/vscode/test/editor.ts · insert test setup inside run"
+const settings = vscode.workspace.getConfiguration('editor');
+await settings.update('autoClosingBrackets', 'always', vscode.ConfigurationTarget.Global);
+await settings.update('autoClosingQuotes', 'always', vscode.ConfigurationTarget.Global);
+await settings.update('autoIndent', 'full', vscode.ConfigurationTarget.Global);
+
+async function openAtEnd(content: string): Promise<vscode.TextEditor> {
+  const document = await vscode.workspace.openTextDocument({ language: 'lox', content });
+  const editor = await vscode.window.showTextDocument(document);
+  editor.options = { insertSpaces: true, tabSize: 2, indentSize: 2 };
+  const end = document.positionAt(content.length);
+  editor.selection = new vscode.Selection(end, end);
+  return editor;
+}
+```
+
+The test sets auto-closing and indentation options explicitly so the
+assertions describe a known editor configuration. `ConfigurationTarget.Global`
+here means the global settings of **our disposable test profile**, created by
+9.1's launcher. These are not changes to your everyday editor settings. The
+launcher removes this profile after the host finishes.
+
+`openAtEnd` creates a fresh unsaved Lox document for each case and shows it in
+the editor. Unlike our fixture check, it supplies the language ID explicitly:
+these cases test editing behavior after recognition. Two-space indentation
+and spaces rather than tabs make the expected text precise.
+
+The last two lines put an empty selection at the end of the starting text:
+that is where our simulated typing will happen. `positionAt` accepts an
+editor string offset; this uses JavaScript's UTF-16 string length, not our
+Rust scanner's UTF-8 byte ranges. The helper's
+`Promise<vscode.TextEditor>` annotation describes the editor returned after
+the asynchronous setup finishes. The
+[VS Code API reference](https://code.visualstudio.com/api/references/vscode-api#TextEditor)
+describes document positions, selections and editor options.
+
+## Toggle a comment and restore the line
+
+Append this **inside `run`, after the helper**, before its closing brace:
+
+```ts title="rlox/editors/vscode/test/editor.ts · append comment check inside run"
+const comment = await openAtEnd('print 1;');
+await vscode.commands.executeCommand('editor.action.commentLine');
+assert.equal(comment.document.getText(), '// print 1;');
+await vscode.commands.executeCommand('editor.action.commentLine');
+assert.equal(comment.document.getText(), 'print 1;');
+console.log('EDITOR CHECK: line comment toggles and restores source');
+```
+
+The command uses the language's line-comment rule. We check both directions:
+commenting inserts `// `, and toggling again restores the original source.
+This exercises VS Code's command rather than reproducing comment insertion
+in our test. Awaiting it lets the editor finish before we read the document.
+
+## Type pairs through the editor
+
+Append these checks **inside `run`, after the comment check**:
+
+```ts title="rlox/editors/vscode/test/editor.ts · append pair checks inside run"
+const pair = await openAtEnd('');
+await vscode.commands.executeCommand('type', { text: '(' });
+assert.equal(pair.document.getText(), '()');
+await vscode.commands.executeCommand('type', { text: ')' });
+assert.equal(pair.document.getText(), '()');
+console.log('EDITOR CHECK: parenthesis closes and existing close is skipped');
+
+const quote = await openAtEnd('');
+await vscode.commands.executeCommand('type', { text: '"' });
+assert.equal(quote.document.getText(), '""');
+console.log('EDITOR CHECK: quotes auto-close in empty Lox source');
+```
+
+The `type` command goes through the editor's typing behavior. Directly
+inserting text through a document edit would bypass the auto-closing action
+we want to test. The parenthesis case also types the closing character:
+VS Code should move past the one it inserted, leaving `()` rather than
+adding another `)`.
+
+The quote check starts from a separate empty document. These assertions
+check representative insertion behavior; the configuration also declares
+brace matching and selection-surrounding pairs. The
+[built-in commands guide](https://code.visualstudio.com/api/references/commands)
+explains invoking editor commands through `executeCommand`.
+
+## Press Enter after an opening brace
+
+Append this final check **inside `run`, after the quote check**:
+
+```ts title="rlox/editors/vscode/test/editor.ts · append indentation check inside run"
+const indent = await openAtEnd('if (true) {');
+await vscode.commands.executeCommand('type', { text: '\n' });
+assert.equal(indent.document.getText(), 'if (true) {\n  ');
+console.log('EDITOR CHECK: opening brace increases indentation by two spaces');
+```
+
+The input has an opening brace and no closing brace. After Enter, the new
+line should contain two spaces, using the line pattern and the explicit
+editor options. The asserted `\n` is an actual line break in the document;
+the two spaces after it are part of the expected text.
+
+Keep the existing `runEditor.ts` unchanged. It already knows how to load the
+extension, run this exported function, report failure and clean up the profile.
+
+## Run the real-editor checks
+
+From **`rlox/editors/vscode/`**, run:
+
+```sh
+npm run check
+npm run test:editor
+```
+
+The first command should type-check successfully. The second builds the
+tests and opens the isolated VS Code host, using the editor cached by 9.1.
+Alongside the existing recognition message, look for:
+
+```text title="New observations from the host test"
+EDITOR CHECK: line comment toggles and restores source
+EDITOR CHECK: parenthesis closes and existing close is skipped
+EDITOR CHECK: quotes auto-close in empty Lox source
+EDITOR CHECK: opening brace increases indentation by two spaces
+```
+
+The launcher should finish with `Editor integration test passed.` and status
+`0`. On a headless Linux machine, use `xvfb-run -a npm run test:editor` with
+Xvfb installed, as in 9.1. Other host diagnostic messages can appear too.
+
+No dependency or script changed, so there's no need to reinstall packages or
+change `package-lock.json`. If the first editing assertion fails, check the
+manifest's configuration path as well as the new file: correctly written
+rules have no effect if VS Code never loads them. Restarting the test command
+launches a fresh host with the current contribution files.
+
+We now check language recognition and actual editing in the same host. The
+configuration gives the editor useful conventions without putting Lox
+semantic logic in TypeScript. Next we'll give it lexical scopes for strings,
+comments and the rest of the language.
+
+<details>
+<summary>Complete resulting extension manifest</summary>
+
+```json title="rlox/editors/vscode/package.json · complete resulting file"
+{
+  "name": "rlox",
+  "displayName": "Rlox — Lox Language",
+  "description": "Lox language support for Beyond the Interpreter.",
+  "version": "0.1.0",
+  "publisher": "beyond-the-interpreter-local",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.144.0",
+    "node": ">=22.23.4"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test:editor": "npm run build && node out/test/runEditor.js"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "lox",
+        "aliases": [
+          "Lox",
+          "lox"
+        ],
+        "extensions": [
+          ".lox"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/vscode": "1.144.0",
+    "@vscode/test-electron": "3.1.0",
+    "typescript": "6.0.3"
+  },
+  "type": "commonjs"
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting host test</summary>
+
+```ts title="rlox/editors/vscode/test/editor.ts · complete resulting file"
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import * as vscode from 'vscode';
+
+export async function run(): Promise<void> {
+  const root = path.resolve(__dirname, '../..');
+  const extension = vscode.extensions.getExtension('beyond-the-interpreter-local.rlox');
+  assert.ok(extension, 'the development extension must be registered');
+  assert.equal(extension.extensionPath, root);
+
+  const fixture = vscode.Uri.file(path.join(root, 'fixtures', 'hello.lox'));
+  const document = await vscode.workspace.openTextDocument(fixture);
+  assert.equal(document.languageId, 'lox');
+
+  const editor = await vscode.window.showTextDocument(document);
+  assert.equal(editor.document.uri.toString(), document.uri.toString());
+  console.log('EDITOR CHECK: hello.lox opened as Lox');
+
+  const settings = vscode.workspace.getConfiguration('editor');
+  await settings.update('autoClosingBrackets', 'always', vscode.ConfigurationTarget.Global);
+  await settings.update('autoClosingQuotes', 'always', vscode.ConfigurationTarget.Global);
+  await settings.update('autoIndent', 'full', vscode.ConfigurationTarget.Global);
+
+  async function openAtEnd(content: string): Promise<vscode.TextEditor> {
+    const document = await vscode.workspace.openTextDocument({ language: 'lox', content });
+    const editor = await vscode.window.showTextDocument(document);
+    editor.options = { insertSpaces: true, tabSize: 2, indentSize: 2 };
+    const end = document.positionAt(content.length);
+    editor.selection = new vscode.Selection(end, end);
+    return editor;
+  }
+
+  const comment = await openAtEnd('print 1;');
+  await vscode.commands.executeCommand('editor.action.commentLine');
+  assert.equal(comment.document.getText(), '// print 1;');
+  await vscode.commands.executeCommand('editor.action.commentLine');
+  assert.equal(comment.document.getText(), 'print 1;');
+  console.log('EDITOR CHECK: line comment toggles and restores source');
+
+  const pair = await openAtEnd('');
+  await vscode.commands.executeCommand('type', { text: '(' });
+  assert.equal(pair.document.getText(), '()');
+  await vscode.commands.executeCommand('type', { text: ')' });
+  assert.equal(pair.document.getText(), '()');
+  console.log('EDITOR CHECK: parenthesis closes and existing close is skipped');
+
+  const quote = await openAtEnd('');
+  await vscode.commands.executeCommand('type', { text: '"' });
+  assert.equal(quote.document.getText(), '""');
+  console.log('EDITOR CHECK: quotes auto-close in empty Lox source');
+
+  const indent = await openAtEnd('if (true) {');
+  await vscode.commands.executeCommand('type', { text: '\n' });
+  assert.equal(indent.document.getText(), 'if (true) {\n  ');
+  console.log('EDITOR CHECK: opening brace increases indentation by two spaces');
+}
+
+```
+
+</details>

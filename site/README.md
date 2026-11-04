@@ -158,3 +158,9 @@ served at `/chapter-9/9.1-language-registration/`. Language registration and the
 first isolated real-VS-Code test have approved text. Matching extension files,
 dependency installation, TypeScript checks and actual editor-host assertions
 pass; the section and extension are accepted.
+
+Section 9.2 is drafted at `src/content/docs/chapter-9/9.2-editing-rules.mdx`,
+served at `/chapter-9/9.2-editing-rules/`. Editing configuration and actual-host
+comment/pair/indentation assertions have approved text. Matching configuration,
+TypeScript checking/build and all five actual-host observations pass; the
+section and extension are accepted.

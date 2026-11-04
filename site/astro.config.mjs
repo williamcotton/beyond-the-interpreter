@@ -77,6 +77,7 @@ export default defineConfig({
           label: 'Chapter 9 · Giving Lox an Editor',
           items: [
             { label: '9.1 · Open Lox in VS Code', link: '/chapter-9/9.1-language-registration/' },
+            { label: '9.2 · Make Lox comfortable to edit', link: '/chapter-9/9.2-editing-rules/' },
           ],
         },
       ],

@@ -28,7 +28,8 @@
         ],
         "extensions": [
           ".lox"
-        ]
+        ],
+        "configuration": "./language-configuration.json"
       }
     ]
   },
