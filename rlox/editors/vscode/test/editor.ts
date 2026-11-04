@@ -53,5 +53,15 @@ export async function run(): Promise<void> {
   await vscode.commands.executeCommand('type', { text: '\n' });
   assert.equal(indent.document.getText(), 'if (true) {\n  ');
   console.log('EDITOR CHECK: opening brace increases indentation by two spaces');
+
+  const inComment = await openAtEnd('// ');
+  await vscode.commands.executeCommand('type', { text: '(' });
+  assert.equal(inComment.document.getText(), '// (');
+  console.log('EDITOR CHECK: comment scope suppresses auto-closing');
+
+  const inString = await openAtEnd('"text ');
+  await vscode.commands.executeCommand('type', { text: '(' });
+  assert.equal(inString.document.getText(), '"text (');
+  console.log('EDITOR CHECK: string scope suppresses auto-closing');
 }
 

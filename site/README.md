@@ -164,3 +164,10 @@ served at `/chapter-9/9.2-editing-rules/`. Editing configuration and actual-host
 comment/pair/indentation assertions have approved text. Matching configuration,
 TypeScript checking/build and all five actual-host observations pass; the
 section and extension are accepted.
+
+Section 9.3 is drafted at `src/content/docs/chapter-9/9.3-syntax-highlighting.mdx`,
+served at `/chapter-9/9.3-syntax-highlighting/`. TextMate grammar, scope/state
+tests and scope-aware editing checks have approved text. Matching grammar,
+all five Node tests and seven actual-host observations pass; the section and
+extension are accepted. Manual color/scope inspection is left
+to the user through the documented development-host launch configuration.

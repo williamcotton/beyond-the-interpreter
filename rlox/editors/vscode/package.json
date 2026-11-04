@@ -16,7 +16,8 @@
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit",
-    "test:editor": "npm run build && node out/test/runEditor.js"
+    "test:editor": "npm run build && node out/test/runEditor.js",
+    "test": "npm run build && node --test out/test/grammar.test.js"
   },
   "contributes": {
     "languages": [
@@ -31,13 +32,22 @@
         ],
         "configuration": "./language-configuration.json"
       }
+    ],
+    "grammars": [
+      {
+        "language": "lox",
+        "scopeName": "source.lox",
+        "path": "./syntaxes/lox.tmLanguage.json"
+      }
     ]
   },
   "devDependencies": {
     "@types/node": "26.6.6",
     "@types/vscode": "1.144.0",
     "@vscode/test-electron": "3.1.0",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "vscode-textmate": "9.3.2",
+    "vscode-oniguruma": "2.0.1"
   },
   "type": "commonjs"
 }

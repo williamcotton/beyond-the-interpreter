@@ -1,0 +1,68 @@
+{
+  "name": "Lox",
+  "scopeName": "source.lox",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#identifiers"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "name": "comment.line.double-slash.lox",
+      "match": "//.*$"
+    },
+    "strings": {
+      "name": "string.quoted.double.lox",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.lox"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.lox"
+        }
+      }
+    },
+    "keywords": {
+      "name": "keyword.control.lox",
+      "match": "(?:and|class|else|false|for|fun|if|nil|or|print|return|super|this|true|var|while)(?![A-Za-z0-9_])"
+    },
+    "numbers": {
+      "name": "constant.numeric.lox",
+      "match": "[0-9]+(?:\\.[0-9]+)?"
+    },
+    "identifiers": {
+      "name": "variable.other.lox",
+      "match": "[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "operators": {
+      "name": "keyword.operator.lox",
+      "match": "!=|==|<=|>=|[=<>!+*/-]"
+    },
+    "punctuation": {
+      "name": "punctuation.lox",
+      "match": "[(){}.,;]"
+    }
+  }
+}

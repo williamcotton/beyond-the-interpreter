@@ -1,0 +1,828 @@
+---
+title: 9.3 — Give source its lexical colors
+slug: chapter-9/9.3-syntax-highlighting
+description: Contribute a TextMate grammar, test scopes and multiline state, and connect string/comment scopes to editing behavior.
+prev:
+  link: /chapter-9/9.2-editing-rules/
+  label: 9.2 · Make Lox comfortable to edit
+next: false
+---
+
+<p className="book-subtitle">Chapter 9 · Giving Lox an Editor</p>
+
+Our extension knows how to edit a Lox file, but its words still need display
+categories. In `print "var // text";`, the first word is a keyword, while
+`var` and `//` inside the quotes belong to a string. Giving everything its
+own regex isn't enough: the editor must remember which context it's in.
+
+Start from [Section 9.2](/chapter-9/9.2-editing-rules/), with your terminal in
+**`rlox/editors/vscode/`**. We'll add a TextMate grammar, test it through the
+real grammar engine, and use its string/comment scopes for pair exclusions.
+The Rust scanner stays unchanged.
+
+## Scopes describe display, themes choose colors
+
+TextMate grammars assign **scope names** such as `keyword.control.lox` and
+`string.quoted.double.lox` to spans of source. A theme maps those names to
+colors and font styles. We contribute scopes, not a fixed palette.
+
+The [VS Code syntax highlight guide](https://code.visualstudio.com/api/language-extensions/syntax-highlight-guide)
+explains this division. It also distinguishes TextMate highlighting from
+semantic tokens: a pattern can recognize a name's spelling without knowing
+which declaration it refers to. Later our Rust analysis and LSP will supply
+that kind of information. A `variable.other.lox` scope here doesn't prove
+that the name resolves to a variable.
+
+Our Logos scanner remains the authoritative native token stream, including
+errors and UTF-8 ranges. A TextMate grammar serves the editor's lexical
+display, with state carried from line to line. It isn't another parser or
+interpreter, and its scope spans aren't our `SyntaxKind` values or byte ranges.
+
+## Keep quoted text in its own context
+
+From **`rlox/editors/vscode/`**, create the grammar directory:
+
+```sh
+mkdir -p syntaxes
+```
+
+Create **`syntaxes/lox.tmLanguage.json`** with this complete content:
+
+```json title="rlox/editors/vscode/syntaxes/lox.tmLanguage.json"
+{
+  "name": "Lox",
+  "scopeName": "source.lox",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#identifiers"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "name": "comment.line.double-slash.lox",
+      "match": "//.*$"
+    },
+    "strings": {
+      "name": "string.quoted.double.lox",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.lox"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.lox"
+        }
+      }
+    },
+    "keywords": {
+      "name": "keyword.control.lox",
+      "match": "(?:and|class|else|false|for|fun|if|nil|or|print|return|super|this|true|var|while)(?![A-Za-z0-9_])"
+    },
+    "numbers": {
+      "name": "constant.numeric.lox",
+      "match": "[0-9]+(?:\\.[0-9]+)?"
+    },
+    "identifiers": {
+      "name": "variable.other.lox",
+      "match": "[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "operators": {
+      "name": "keyword.operator.lox",
+      "match": "!=|==|<=|>=|[=<>!+*/-]"
+    },
+    "punctuation": {
+      "name": "punctuation.lox",
+      "match": "[(){}.,;]"
+    }
+  }
+}
+```
+
+The top-level `patterns` includes rules from `repository`. A `#name` refers
+to a rule in this same file. The editor considers the earliest match in the
+line; ordering resolves competing rules starting at the same place.
+
+Most rules match one span. A string instead has `begin` and `end` delimiters.
+While that context is open, the outer keyword/comment rules don't apply.
+The context can remain open across a line break, which is necessary for Lox's
+multiline strings. There is no backslash-escape rule: the next quote ends the
+string even when preceded by a backslash. The captures give its delimiters
+more specific scopes while retaining the surrounding string scope.
+
+The keyword pattern checks that the spelling isn't followed by another ASCII
+name character. This keeps `printer` whole. The identifier rule can consume
+names such as `_if` from their beginning, before a later keyword match could
+start inside them. A preceding number can end immediately before a keyword,
+so `123print` receives separate numeric and keyword scopes.
+
+The number, name and operator rules reuse boundaries we've already taught.
+Numbers require digits after a fractional dot; signs remain operators. JSON
+escapes the regex backslash in the number rule, so `\\.` supplies a literal
+dot match. All sixteen keywords and the remaining punctuation are represented.
+The `//.*$` comment rule matches only the remainder of the current line.
+
+## Tell VS Code where to load it
+
+In **`package.json`**, append a `grammars` contribution after `languages`:
+
+```diff title="rlox/editors/vscode/package.json · grammar contribution"
+         "configuration": "./language-configuration.json"
+       }
+-    ]
++    ],
++    "grammars": [
++      {
++        "language": "lox",
++        "scopeName": "source.lox",
++        "path": "./syntaxes/lox.tmLanguage.json"
++      }
++    ]
+```
+
+The language ID connects it to `.lox` documents. `scopeName` must match the
+grammar's root scope, and the path is relative to the extension root.
+
+We want focused scope assertions as well as a real-editor check. Add these
+two entries after TypeScript in the same manifest's `devDependencies`:
+
+```diff title="rlox/editors/vscode/package.json · grammar test dependencies"
+-    "typescript": "6.0.3"
++    "typescript": "6.0.3",
++    "vscode-textmate": "9.3.2",
++    "vscode-oniguruma": "2.0.1"
+```
+
+These are the actual TextMate engine and its Oniguruma regex implementation,
+used by our tests rather than a homemade tokenizer. Their maintainers'
+[TextMate example](https://github.com/microsoft/vscode-textmate) shows the
+registry/regex-engine connection. They are development dependencies; VS Code
+provides its own highlighting engine when loading our declarative extension.
+
+Add this entry **after `test:editor` in `scripts`**, including the separating
+comma:
+
+```diff title="rlox/editors/vscode/package.json · fast test script"
+-    "test:editor": "npm run build && node out/test/runEditor.js"
++    "test:editor": "npm run build && node out/test/runEditor.js",
++    "test": "npm run build && node --test out/test/grammar.test.js"
+```
+
+The fast grammar tests run in Node without launching an editor. They
+complement the host tests; they don't replace contribution wiring or editing
+checks.
+
+## Load the contributed grammar in a test
+
+Create **`test/grammar.test.ts`** with the following initial content:
+
+```ts title="rlox/editors/vscode/test/grammar.test.ts · initial file"
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { test } from 'node:test';
+import { INITIAL, Registry, parseRawGrammar, type StateStack } from 'vscode-textmate';
+import { loadWASM, OnigScanner, OnigString } from 'vscode-oniguruma';
+
+const root = path.resolve(__dirname, '../..');
+const grammarPromise = (async () => {
+  const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const declaration = manifest.contributes.grammars[0];
+  assert.equal(declaration.language, 'lox');
+  assert.equal(declaration.scopeName, 'source.lox');
+  const grammarPath = path.resolve(root, declaration.path);
+
+  const wasm = readFileSync(require.resolve('vscode-oniguruma/release/onig.wasm'));
+  await loadWASM(Uint8Array.from(wasm).buffer);
+  const registry = new Registry({
+    onigLib: Promise.resolve({
+      createOnigScanner: (patterns: string[]) => new OnigScanner(patterns),
+      createOnigString: (text: string) => new OnigString(text),
+    }),
+    loadGrammar: async (scope) => scope === declaration.scopeName
+      ? parseRawGrammar(readFileSync(grammarPath, 'utf8'), grammarPath)
+      : null,
+  });
+  const grammar = await registry.loadGrammar('source.lox');
+  assert.ok(grammar, 'the contributed grammar must load');
+  return grammar;
+})();
+
+async function scoped(line: string, state: StateStack = INITIAL) {
+  const result = (await grammarPromise).tokenizeLine(line, state);
+  return {
+    state: result.ruleStack,
+    tokens: result.tokens.map((token) => ({
+      text: line.slice(token.startIndex, Math.min(token.endIndex, line.length)),
+      scopes: token.scopes,
+    })),
+  };
+}
+```
+
+We read the contribution from the actual manifest, then resolve its grammar
+path. A wrong path or root scope should fail this setup rather than leaving
+the test pointed at an unrelated hard-coded grammar file.
+
+Oniguruma's regex engine comes as WebAssembly. `require.resolve` locates its
+installed binary; `Uint8Array.from(...).buffer` copies exactly those bytes
+into an `ArrayBuffer` for `loadWASM`. This is the regex engine, not a Lox
+interpreter compiled to WebAssembly.
+
+The registry needs a grammar loader and factories for the regex scanner and
+strings. The callbacks provide those pieces. `grammarPromise` starts this
+asynchronous setup once; each test awaits the same loaded grammar. The
+[Oniguruma project](https://github.com/microsoft/vscode-oniguruma) documents
+its WebAssembly loading API.
+
+`scoped` tokenizes one line and returns both scopes and the state needed for
+the next line. `INITIAL` means no carried context. TextMate's returned indices
+address the JavaScript string, so we use `slice` on that line, not Rust byte
+ranges. The `Math.min` clips a possible end-of-line sentinel to the actual
+line length. `type StateStack` imports only a TypeScript type for the helper's
+state parameter.
+
+## Check exact keywords and longer names
+
+Append this test **at the end of `grammar.test.ts`**:
+
+```ts title="rlox/editors/vscode/test/grammar.test.ts · append word test"
+test('keywords leave longer names whole', async () => {
+  const words = 'and class else false for fun if nil or print return super this true var while'.split(' ');
+  const result = await scoped(words.join(' '));
+  assert.deepEqual(
+    result.tokens.filter((token) => token.scopes.includes('keyword.control.lox')).map((token) => token.text),
+    words,
+  );
+  for (const name of ['forest', 'printer', 'true_value', '_if', 'Print']) {
+    const result = await scoped(name);
+    assert.equal(result.tokens[0].text, name);
+    assert.ok(result.tokens.every((token) => !token.scopes.includes('keyword.control.lox')));
+    assert.ok(result.tokens[0].scopes.includes('variable.other.lox'));
+  }
+});
+```
+
+These assertions check the scope attached to the original text. Looking at a
+regex in isolation wouldn't tell us which competing grammar rule won.
+
+## Carry a string across lines
+
+Append these tests **at the end of the same file**:
+
+```ts title="rlox/editors/vscode/test/grammar.test.ts · append string tests"
+test('strings carry state across lines and shield comment-like text', async () => {
+  const first = await scoped('print "é🦀 //');
+  assert.ok(first.tokens.find((token) => token.text === 'é🦀 //')?.scopes.includes('string.quoted.double.lox'));
+  assert.ok(first.tokens.every((token) => !token.scopes.includes('comment.line.double-slash.lox')));
+
+  const second = await scoped('var while" print', first.state);
+  assert.ok(second.tokens.find((token) => token.text === 'var while')?.scopes.includes('string.quoted.double.lox'));
+  assert.ok(second.tokens.find((token) => token.text === 'print')?.scopes.includes('keyword.control.lox'));
+});
+
+test('backslashes do not escape quotes and unfinished strings stay open', async () => {
+  const closed = await scoped('"a\\"print');
+  assert.ok(closed.tokens.find((token) => token.text === 'print')?.scopes.includes('keyword.control.lox'));
+
+  const first = await scoped('"unfinished');
+  const second = await scoped('print // still string', first.state);
+  assert.ok(second.tokens.every((token) => token.scopes.includes('string.quoted.double.lox')));
+});
+```
+
+Passing `first.state` is the important part: starting the second line at
+`INITIAL` would forget its unfinished string. `var while` and the comment-like
+text stay inside the string until the closing quote; the later `print` is a
+keyword again. The backslash case checks Lox's lack of escape processing.
+
+An unfinished string can keep its display context open on later lines. Our
+native scanner instead returns an `Error` range at EOF. Those observations
+serve different jobs: editor coloring can continue while a document is
+incomplete, while native inspection reports malformed input. The grammar
+doesn't supply compiler diagnostics.
+
+## Check the remaining boundaries
+
+Append these tests **at the end of the same file**:
+
+```ts title="rlox/editors/vscode/test/grammar.test.ts · append boundary tests"
+test('numbers leave signs, dots and following names separate', async () => {
+  const result = await scoped('-12.5 123. .5 1e3 1.2.3 123print');
+  assert.deepEqual(
+    result.tokens.filter((token) => token.scopes.includes('constant.numeric.lox')).map((token) => token.text),
+    ['12.5', '123', '5', '1', '1.2', '3', '123'],
+  );
+  assert.ok(result.tokens.find((token) => token.text === '-')?.scopes.includes('keyword.operator.lox'));
+  assert.ok(result.tokens.find((token) => token.text === 'e3')?.scopes.includes('variable.other.lox'));
+  assert.ok(result.tokens.find((token) => token.text === 'print')?.scopes.includes('keyword.control.lox'));
+});
+
+test('line comments stop at the line boundary', async () => {
+  const comment = await scoped('// print "text"');
+  assert.ok(comment.tokens.every((token) => token.scopes.includes('comment.line.double-slash.lox')));
+  const next = await scoped('print != == <= >= / * + - ! = < > (){}.,;', comment.state);
+  assert.ok(next.tokens.find((token) => token.text === 'print')?.scopes.includes('keyword.control.lox'));
+  assert.deepEqual(
+    next.tokens.filter((token) => token.scopes.includes('keyword.operator.lox')).map((token) => token.text),
+    ['!=', '==', '<=', '>=', '/', '*', '+', '-', '!', '=', '<', '>'],
+  );
+  assert.ok(next.tokens.some((token) => token.scopes.includes('punctuation.lox')));
+});
+```
+
+The cases check that a dot, sign or following name isn't swallowed into the
+number, and that comments stop before the next line. We check scopes rather
+than theme-specific colors. The native Rust tests still own the scanner's
+full lexical contract.
+
+## Use scopes to guide auto-closing
+
+Now the editor can distinguish strings and comments. In
+**`language-configuration.json`**, add `notIn` to each of the three existing
+`autoClosingPairs` objects:
+
+```diff title="rlox/editors/vscode/language-configuration.json · pair exclusions"
+       "open": "{",
+-      "close": "}"
++      "close": "}",
++      "notIn": [
++        "string",
++        "comment"
++      ]
+```
+
+Make the corresponding additions for the `(` / `)` and quote objects too:
+
+```json title="rlox/editors/vscode/language-configuration.json · resulting autoClosingPairs"
+[
+  {
+    "open": "{",
+    "close": "}",
+    "notIn": [
+      "string",
+      "comment"
+    ]
+  },
+  {
+    "open": "(",
+    "close": ")",
+    "notIn": [
+      "string",
+      "comment"
+    ]
+  },
+  {
+    "open": "\"",
+    "close": "\"",
+    "notIn": [
+      "string",
+      "comment"
+    ]
+  }
+]
+```
+
+`notIn` uses the standard context names `string` and `comment`, not the full
+Lox scope names. VS Code derives those contexts from our grammar's scopes,
+as described in the [language configuration guide](https://code.visualstudio.com/api/language-extensions/language-configuration-guide#autoclosing).
+Keep the surrounding pairs, bracket declarations and indentation rules as
+before; scopes don't turn the indentation heuristic into a parser.
+
+Inside **`test/editor.ts`**, append these checks **at the end of `run`, after
+the existing indentation check and before the final function brace**:
+
+```ts title="rlox/editors/vscode/test/editor.ts · append scope-aware checks inside run"
+const inComment = await openAtEnd('// ');
+await vscode.commands.executeCommand('type', { text: '(' });
+assert.equal(inComment.document.getText(), '// (');
+console.log('EDITOR CHECK: comment scope suppresses auto-closing');
+
+const inString = await openAtEnd('"text ');
+await vscode.commands.executeCommand('type', { text: '(' });
+assert.equal(inString.document.getText(), '"text (');
+console.log('EDITOR CHECK: string scope suppresses auto-closing');
+```
+
+A plain opening parenthesis auto-closed in 9.2. These cases must insert only
+the opening character because the cursor is inside a comment or string.
+They exercise the grammar/configuration connection inside the actual editor,
+while preserving the earlier recognition and editing assertions.
+
+## Run both test layers
+
+From **`rlox/editors/vscode/`**, run:
+
+```sh
+npm install
+npm run check
+npm test
+npm run test:editor
+```
+
+Keep the generated `package-lock.json` update for the two new development
+dependencies. The Node tests should report the named scope/state cases as
+passing. The host should still pass its original checks and print:
+
+```text title="New scope-aware host observations"
+EDITOR CHECK: comment scope suppresses auto-closing
+EDITOR CHECK: string scope suppresses auto-closing
+```
+
+The launcher should finish with status `0`. Use Xvfb for the host command on
+headless Linux as before. No Rust or native scanner change is needed.
+
+## Inspect the colors yourself
+
+Create **`fixtures/highlighting.lox`**, including its final newline:
+
+```text title="rlox/editors/vscode/fixtures/highlighting.lox"
+// The following quoted text includes a comment marker.
+var printer = 123.45;
+print "é // still a string
+var while";
+if (printer >= 123 and true) {
+  print printer;
+}
+```
+
+Create **`.vscode/launch.json`**; first make its directory from the extension
+root:
+
+```sh
+mkdir -p .vscode
+```
+
+```json title="rlox/editors/vscode/.vscode/launch.json"
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Inspect Lox highlighting",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--user-data-dir=${workspaceFolder}/.vscode-test/inspect-user",
+        "--extensions-dir=${workspaceFolder}/.vscode-test/inspect-extensions",
+        "--disable-extensions",
+        "${workspaceFolder}/fixtures/highlighting.lox"
+      ]
+    }
+  ]
+}
+```
+
+Open **`rlox/editors/vscode/` as the workspace folder** in VS Code 1.144.0 or
+newer. Choose **Run and Debug → Inspect Lox highlighting**, then start it
+with F5. This launches another development host and opens our fixture. The
+`${workspaceFolder}` paths refer to this extension folder; `${execPath}`
+uses the VS Code build you're running, so use a build compatible with the
+manifest. The downloaded 1.144.1 test application is also a compatible build.
+
+This manual host uses its own ignored `inspect-user` and `inspect-extensions`
+directories under `.vscode-test/`; they persist between manual sessions,
+unlike the temporary automated-test profile. It doesn't install our extension
+into your usual profile. No build task is needed for these declarative
+language contributions.
+
+In the child window, run **Developer: Inspect Editor Tokens and Scopes** from
+the Command Palette. Select `print`, the number, and the text inside the
+multiline string. Verify their TextMate scopes; the `//` and keyword spellings
+inside that string should remain string content. Exact colors depend on your
+theme. Stop the debug session when finished.
+
+The fast tests give repeatable scope/state evidence, the real host checks
+integration with editing behavior, and this inspection lets you judge the
+visible result. We now have lexical highlighting in the same extension that
+will later become our LSP client.
+
+<details>
+<summary>Complete resulting extension manifest</summary>
+
+```json title="rlox/editors/vscode/package.json · complete resulting file"
+{
+  "name": "rlox",
+  "displayName": "Rlox — Lox Language",
+  "description": "Lox language support for Beyond the Interpreter.",
+  "version": "0.1.0",
+  "publisher": "beyond-the-interpreter-local",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.144.0",
+    "node": ">=22.23.4"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test:editor": "npm run build && node out/test/runEditor.js",
+    "test": "npm run build && node --test out/test/grammar.test.js"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "lox",
+        "aliases": [
+          "Lox",
+          "lox"
+        ],
+        "extensions": [
+          ".lox"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lox",
+        "scopeName": "source.lox",
+        "path": "./syntaxes/lox.tmLanguage.json"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/vscode": "1.144.0",
+    "@vscode/test-electron": "3.1.0",
+    "typescript": "6.0.3",
+    "vscode-textmate": "9.3.2",
+    "vscode-oniguruma": "2.0.1"
+  },
+  "type": "commonjs"
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting language configuration</summary>
+
+```json title="rlox/editors/vscode/language-configuration.json · complete resulting file"
+{
+  "comments": {
+    "lineComment": "//"
+  },
+  "brackets": [
+    [
+      "{",
+      "}"
+    ],
+    [
+      "(",
+      ")"
+    ]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "{",
+      "close": "}",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    },
+    {
+      "open": "(",
+      "close": ")",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    },
+    {
+      "open": "\"",
+      "close": "\"",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    }
+  ],
+  "surroundingPairs": [
+    [
+      "{",
+      "}"
+    ],
+    [
+      "(",
+      ")"
+    ],
+    [
+      "\"",
+      "\""
+    ]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "^.*\\{[^}]*$",
+    "decreaseIndentPattern": "^\\s*\\}"
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting grammar test file</summary>
+
+```ts title="rlox/editors/vscode/test/grammar.test.ts · complete resulting file"
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { test } from 'node:test';
+import { INITIAL, Registry, parseRawGrammar, type StateStack } from 'vscode-textmate';
+import { loadWASM, OnigScanner, OnigString } from 'vscode-oniguruma';
+
+const root = path.resolve(__dirname, '../..');
+const grammarPromise = (async () => {
+  const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const declaration = manifest.contributes.grammars[0];
+  assert.equal(declaration.language, 'lox');
+  assert.equal(declaration.scopeName, 'source.lox');
+  const grammarPath = path.resolve(root, declaration.path);
+
+  const wasm = readFileSync(require.resolve('vscode-oniguruma/release/onig.wasm'));
+  await loadWASM(Uint8Array.from(wasm).buffer);
+  const registry = new Registry({
+    onigLib: Promise.resolve({
+      createOnigScanner: (patterns: string[]) => new OnigScanner(patterns),
+      createOnigString: (text: string) => new OnigString(text),
+    }),
+    loadGrammar: async (scope) => scope === declaration.scopeName
+      ? parseRawGrammar(readFileSync(grammarPath, 'utf8'), grammarPath)
+      : null,
+  });
+  const grammar = await registry.loadGrammar('source.lox');
+  assert.ok(grammar, 'the contributed grammar must load');
+  return grammar;
+})();
+
+async function scoped(line: string, state: StateStack = INITIAL) {
+  const result = (await grammarPromise).tokenizeLine(line, state);
+  return {
+    state: result.ruleStack,
+    tokens: result.tokens.map((token) => ({
+      text: line.slice(token.startIndex, Math.min(token.endIndex, line.length)),
+      scopes: token.scopes,
+    })),
+  };
+}
+
+test('keywords leave longer names whole', async () => {
+  const words = 'and class else false for fun if nil or print return super this true var while'.split(' ');
+  const result = await scoped(words.join(' '));
+  assert.deepEqual(
+    result.tokens.filter((token) => token.scopes.includes('keyword.control.lox')).map((token) => token.text),
+    words,
+  );
+  for (const name of ['forest', 'printer', 'true_value', '_if', 'Print']) {
+    const result = await scoped(name);
+    assert.equal(result.tokens[0].text, name);
+    assert.ok(result.tokens.every((token) => !token.scopes.includes('keyword.control.lox')));
+    assert.ok(result.tokens[0].scopes.includes('variable.other.lox'));
+  }
+});
+
+test('strings carry state across lines and shield comment-like text', async () => {
+  const first = await scoped('print "é🦀 //');
+  assert.ok(first.tokens.find((token) => token.text === 'é🦀 //')?.scopes.includes('string.quoted.double.lox'));
+  assert.ok(first.tokens.every((token) => !token.scopes.includes('comment.line.double-slash.lox')));
+
+  const second = await scoped('var while" print', first.state);
+  assert.ok(second.tokens.find((token) => token.text === 'var while')?.scopes.includes('string.quoted.double.lox'));
+  assert.ok(second.tokens.find((token) => token.text === 'print')?.scopes.includes('keyword.control.lox'));
+});
+
+test('backslashes do not escape quotes and unfinished strings stay open', async () => {
+  const closed = await scoped('"a\\"print');
+  assert.ok(closed.tokens.find((token) => token.text === 'print')?.scopes.includes('keyword.control.lox'));
+
+  const first = await scoped('"unfinished');
+  const second = await scoped('print // still string', first.state);
+  assert.ok(second.tokens.every((token) => token.scopes.includes('string.quoted.double.lox')));
+});
+
+test('numbers leave signs, dots and following names separate', async () => {
+  const result = await scoped('-12.5 123. .5 1e3 1.2.3 123print');
+  assert.deepEqual(
+    result.tokens.filter((token) => token.scopes.includes('constant.numeric.lox')).map((token) => token.text),
+    ['12.5', '123', '5', '1', '1.2', '3', '123'],
+  );
+  assert.ok(result.tokens.find((token) => token.text === '-')?.scopes.includes('keyword.operator.lox'));
+  assert.ok(result.tokens.find((token) => token.text === 'e3')?.scopes.includes('variable.other.lox'));
+  assert.ok(result.tokens.find((token) => token.text === 'print')?.scopes.includes('keyword.control.lox'));
+});
+
+test('line comments stop at the line boundary', async () => {
+  const comment = await scoped('// print "text"');
+  assert.ok(comment.tokens.every((token) => token.scopes.includes('comment.line.double-slash.lox')));
+  const next = await scoped('print != == <= >= / * + - ! = < > (){}.,;', comment.state);
+  assert.ok(next.tokens.find((token) => token.text === 'print')?.scopes.includes('keyword.control.lox'));
+  assert.deepEqual(
+    next.tokens.filter((token) => token.scopes.includes('keyword.operator.lox')).map((token) => token.text),
+    ['!=', '==', '<=', '>=', '/', '*', '+', '-', '!', '=', '<', '>'],
+  );
+  assert.ok(next.tokens.some((token) => token.scopes.includes('punctuation.lox')));
+});
+```
+
+</details>
+
+<details>
+<summary>Complete resulting host test</summary>
+
+```ts title="rlox/editors/vscode/test/editor.ts · complete resulting file"
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import * as vscode from 'vscode';
+
+export async function run(): Promise<void> {
+  const root = path.resolve(__dirname, '../..');
+  const extension = vscode.extensions.getExtension('beyond-the-interpreter-local.rlox');
+  assert.ok(extension, 'the development extension must be registered');
+  assert.equal(extension.extensionPath, root);
+
+  const fixture = vscode.Uri.file(path.join(root, 'fixtures', 'hello.lox'));
+  const document = await vscode.workspace.openTextDocument(fixture);
+  assert.equal(document.languageId, 'lox');
+
+  const editor = await vscode.window.showTextDocument(document);
+  assert.equal(editor.document.uri.toString(), document.uri.toString());
+  console.log('EDITOR CHECK: hello.lox opened as Lox');
+
+  const settings = vscode.workspace.getConfiguration('editor');
+  await settings.update('autoClosingBrackets', 'always', vscode.ConfigurationTarget.Global);
+  await settings.update('autoClosingQuotes', 'always', vscode.ConfigurationTarget.Global);
+  await settings.update('autoIndent', 'full', vscode.ConfigurationTarget.Global);
+
+  async function openAtEnd(content: string): Promise<vscode.TextEditor> {
+    const document = await vscode.workspace.openTextDocument({ language: 'lox', content });
+    const editor = await vscode.window.showTextDocument(document);
+    editor.options = { insertSpaces: true, tabSize: 2, indentSize: 2 };
+    const end = document.positionAt(content.length);
+    editor.selection = new vscode.Selection(end, end);
+    return editor;
+  }
+
+  const comment = await openAtEnd('print 1;');
+  await vscode.commands.executeCommand('editor.action.commentLine');
+  assert.equal(comment.document.getText(), '// print 1;');
+  await vscode.commands.executeCommand('editor.action.commentLine');
+  assert.equal(comment.document.getText(), 'print 1;');
+  console.log('EDITOR CHECK: line comment toggles and restores source');
+
+  const pair = await openAtEnd('');
+  await vscode.commands.executeCommand('type', { text: '(' });
+  assert.equal(pair.document.getText(), '()');
+  await vscode.commands.executeCommand('type', { text: ')' });
+  assert.equal(pair.document.getText(), '()');
+  console.log('EDITOR CHECK: parenthesis closes and existing close is skipped');
+
+  const quote = await openAtEnd('');
+  await vscode.commands.executeCommand('type', { text: '"' });
+  assert.equal(quote.document.getText(), '""');
+  console.log('EDITOR CHECK: quotes auto-close in empty Lox source');
+
+  const indent = await openAtEnd('if (true) {');
+  await vscode.commands.executeCommand('type', { text: '\n' });
+  assert.equal(indent.document.getText(), 'if (true) {\n  ');
+  console.log('EDITOR CHECK: opening brace increases indentation by two spaces');
+
+  const inComment = await openAtEnd('// ');
+  await vscode.commands.executeCommand('type', { text: '(' });
+  assert.equal(inComment.document.getText(), '// (');
+  console.log('EDITOR CHECK: comment scope suppresses auto-closing');
+
+  const inString = await openAtEnd('"text ');
+  await vscode.commands.executeCommand('type', { text: '(' });
+  assert.equal(inString.document.getText(), '"text (');
+  console.log('EDITOR CHECK: string scope suppresses auto-closing');
+}
+
+```
+
+</details>

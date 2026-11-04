@@ -1,0 +1,7 @@
+// The following quoted text includes a comment marker.
+var printer = 123.45;
+print "é // still a string
+var while";
+if (printer >= 123 and true) {
+  print printer;
+}
