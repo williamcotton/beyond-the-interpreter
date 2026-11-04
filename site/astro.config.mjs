@@ -73,6 +73,12 @@ export default defineConfig({
             { label: '8.3 · Test the command readers run', link: '/chapter-8/8.3-cli-tests/' },
           ],
         },
+        {
+          label: 'Chapter 9 · Giving Lox an Editor',
+          items: [
+            { label: '9.1 · Open Lox in VS Code', link: '/chapter-9/9.1-language-registration/' },
+          ],
+        },
       ],
       customCss: ['./src/styles/book.css'],
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },

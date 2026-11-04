@@ -152,3 +152,9 @@ served at `/chapter-8/8.3-cli-tests/`. Real-executable integration tests and
 a deliberate stream regression/restoration have approved text. Matching tests
 and the actual dependency/failure/recovery route pass; the section and code
 are accepted, completing Chapter 8.
+
+Section 9.1 is drafted at `src/content/docs/chapter-9/9.1-language-registration.mdx`,
+served at `/chapter-9/9.1-language-registration/`. Language registration and the
+first isolated real-VS-Code test have approved text. Matching extension files,
+dependency installation, TypeScript checks and actual editor-host assertions
+pass; the section and extension are accepted.

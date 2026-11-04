@@ -1,0 +1,338 @@
+---
+title: 9.1 — Open Lox in VS Code
+slug: chapter-9/9.1-language-registration
+description: Register .lox files and launch an isolated VS Code host to test real language recognition.
+prev:
+  link: /chapter-8/8.3-cli-tests/
+  label: 8.3 · Test the command readers run
+next: false
+---
+
+<p className="book-subtitle">Chapter 9 · Giving Lox an Editor</p>
+
+Our command can inspect a Lox file, but an editor still needs to know what
+`.lox` means. Let's give VS Code that association, then test it by opening a
+real file in a real editor instance. This is the beginning of the extension
+that will later connect to our language server.
+
+Start from [Section 8.3](/chapter-8/8.3-cli-tests/), with your terminal in
+**`rlox/`**. The **`editors/vscode/` directory should not exist yet**.
+The Rust program and its tests stay as they are. Our first extension only
+registers the language; editing rules and syntax colors will follow.
+
+## A small extension, an observable result
+
+We'll register the language ID `lox`, give it the display name `Lox`, and
+associate it with `.lox` files. VS Code can read those declarations from an
+extension manifest without running an activation function.
+
+Our first automated check will find this extension, open `hello.lox`, assert
+that its language ID is `lox`, and show that document in the editor. The
+check runs *inside* VS Code rather than imitating its APIs in a unit test.
+
+```text title="Where the test runs"
+Node launcher
+  → creates a disposable editor profile
+  → starts VS Code with our development extension
+      → host test opens hello.lox and checks languageId
+  ← waits for the test host to exit
+  → removes the disposable profile
+```
+
+The [VS Code testing guide](https://code.visualstudio.com/api/working-with-extensions/testing-extension)
+calls this an Extension Development Host. This separate editor instance lets
+us exercise the actual contribution without installing it into our everyday
+editor profile.
+
+## Create the extension manifest
+
+Use Node.js **22.23.4 or newer** and npm **9.6.5 or newer**. Check your installed
+versions, then create the directories from **`rlox/`**:
+
+```sh
+node --version
+npm --version
+mkdir -p editors/vscode/test editors/vscode/fixtures
+cd editors/vscode
+```
+
+Your terminal is now in **`rlox/editors/vscode/`**. Create **`package.json`**
+with this complete content:
+
+```json title="rlox/editors/vscode/package.json"
+{
+  "name": "rlox",
+  "displayName": "Rlox — Lox Language",
+  "description": "Lox language support for Beyond the Interpreter.",
+  "version": "0.1.0",
+  "publisher": "beyond-the-interpreter-local",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.144.0",
+    "node": ">=22.23.4"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test:editor": "npm run build && node out/test/runEditor.js"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "lox",
+        "aliases": [
+          "Lox",
+          "lox"
+        ],
+        "extensions": [
+          ".lox"
+        ]
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/vscode": "1.144.0",
+    "@vscode/test-electron": "3.1.0",
+    "typescript": "6.0.3"
+  },
+  "type": "commonjs"
+}
+```
+
+An extension is an npm-shaped project, but `contributes.languages` is the
+part VS Code reads to recognize our files. `id` is the programmatic language
+name; `aliases` supplies names shown to readers; `extensions` chooses the file
+suffix. The official [language contribution reference](https://code.visualstudio.com/api/references/contribution-points#contributes.languages)
+describes these fields.
+
+VS Code identifies the extension as `publisher.name`, so our test will look
+for `beyond-the-interpreter-local.rlox`. The publisher here is a local
+identifier. This lesson develops the extension locally; it doesn't publish
+it or assume a Marketplace account. There is no `main` entry point because
+language registration is declarative. The TypeScript we'll write belongs to
+the tests, not to a runtime language engine.
+
+The `devDependencies` supply the TypeScript compiler, Node and VS Code type
+definitions, and the editor test launcher. Exact versions keep this route
+reproducible. `@types/vscode` describes the 1.144 API line; the test host will
+be VS Code **1.144.1**, satisfying our manifest's `^1.144.0` engine range.
+TypeScript **6.0.3** supports the Node module settings below; we don't need a
+compiler migration to teach editor registration.
+
+## Compile the test files
+
+Create **`tsconfig.json`**:
+
+```json title="rlox/editors/vscode/tsconfig.json"
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "out",
+    "rootDir": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "types": [
+      "node"
+    ],
+    "skipLibCheck": true
+  },
+  "include": [
+    "test/**/*.ts"
+  ]
+}
+```
+
+TypeScript adds static checking to JavaScript. This configuration checks our
+`test/` files and emits JavaScript under `out/`, preserving the directory
+layout: `test/editor.ts` becomes `out/test/editor.js`. Type annotations are
+removed during compilation.
+
+`NodeNext` follows Node's package/module conventions. Our manifest explicitly
+chooses `commonjs`, so the compiled files can use Node's `__dirname` value.
+The [TypeScript module reference](https://www.typescriptlang.org/tsconfig/module.html)
+explains how this mode uses the manifest. `strict` checks our own code thoroughly; `skipLibCheck` skips checking the
+bodies of installed declaration files while still using their types.
+
+Create **`.gitignore`** beside that configuration:
+
+```text title="rlox/editors/vscode/.gitignore"
+node_modules/
+out/
+.vscode-test/
+```
+
+Dependencies, emitted JavaScript and downloaded test editors are generated
+locally. Keep source files, the manifest and the generated `package-lock.json`
+in version control instead.
+
+## Give the editor a real file
+
+Create **`fixtures/hello.lox`**, including its final newline:
+
+```text title="rlox/editors/vscode/fixtures/hello.lox"
+print "Hello from the editor!";
+```
+
+This fixture belongs to the extension tests. It doesn't replace the existing
+`rlox/hello.lox` used by the command-line lessons. Its `.lox` suffix is what
+we're testing now; interpreting or highlighting the program isn't required
+for language recognition.
+
+## Write the check that runs inside VS Code
+
+Create **`test/editor.ts`**:
+
+```ts title="rlox/editors/vscode/test/editor.ts"
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import * as vscode from 'vscode';
+
+export async function run(): Promise<void> {
+  const root = path.resolve(__dirname, '../..');
+  const extension = vscode.extensions.getExtension('beyond-the-interpreter-local.rlox');
+  assert.ok(extension, 'the development extension must be registered');
+  assert.equal(extension.extensionPath, root);
+
+  const fixture = vscode.Uri.file(path.join(root, 'fixtures', 'hello.lox'));
+  const document = await vscode.workspace.openTextDocument(fixture);
+  assert.equal(document.languageId, 'lox');
+
+  const editor = await vscode.window.showTextDocument(document);
+  assert.equal(editor.document.uri.toString(), document.uri.toString());
+  console.log('EDITOR CHECK: hello.lox opened as Lox');
+}
+
+```
+
+Imports bring in Node's assertion/path helpers and the actual `vscode` API.
+The exported `run` function is the entry point our test launcher expects.
+`Promise<void>` says that its asynchronous work completes without returning
+a value; `await` waits for each editor operation to finish before we inspect
+its result.
+
+`__dirname` will be `out/test/` when this code runs. Moving up two directories
+finds the extension root. We check both the extension's identity and its path
+so this test can't accidentally succeed against another installed copy.
+
+`Uri.file` converts the fixture's filesystem path into an editor URI.
+`openTextDocument` opens it through VS Code's real language detection. If our
+manifest forgets the suffix or names the language incorrectly, the
+`languageId` assertion will fail. `showTextDocument` then opens an editor for
+that document, and we check the document it actually shows.
+
+This file can't run as an ordinary Node script: the `vscode` module is
+provided by the extension host. We need a second file to launch that host.
+
+## Launch the host from Node
+
+Create **`test/runEditor.ts`**:
+
+```ts title="rlox/editors/vscode/test/runEditor.ts"
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { runTests } from '@vscode/test-electron';
+
+async function main(): Promise<void> {
+  const root = path.resolve(__dirname, '../..');
+  const profile = await mkdtemp(path.join(os.tmpdir(), 'rlox-editor-'));
+
+  try {
+    await runTests({
+      version: '1.144.1',
+      extensionDevelopmentPath: root,
+      extensionTestsPath: path.join(__dirname, 'editor.js'),
+      launchArgs: [
+        '--user-data-dir', path.join(profile, 'user'),
+        '--extensions-dir', path.join(profile, 'extensions'),
+        '--disable-extensions',
+        '--skip-welcome',
+        '--skip-release-notes',
+        '--disable-gpu',
+      ],
+    });
+    console.log('Editor integration test passed.');
+  } finally {
+    await rm(profile, { recursive: true, force: true });
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
+```
+
+The two files run in different environments. This launcher is an ordinary
+Node process. `runTests` starts the VS Code build named by `version`, loads
+our directory as a development extension, and asks the host to run the
+compiled `editor.js` entry point. Its options and exported test entry point
+are documented by [the test-electron project](https://github.com/microsoft/vscode-test).
+
+`mkdtemp` creates a unique temporary directory. The `user` and `extensions`
+paths inside it are passed explicitly to VS Code, separating settings and
+installed extensions from our usual profile. `--disable-extensions` disables
+other installed extensions; the development extension is still loaded.
+Welcome/release screens are skipped, and GPU acceleration isn't required
+for these functional checks.
+
+The editor download is cached under `.vscode-test/` in this extension project.
+The cache and the profile have different lifetimes: the pinned editor can be
+reused, while each run gets a fresh profile. `await runTests(...)` waits for
+the host to finish; only then does `finally` remove our temporary directory.
+Cleanup also runs when the test fails. Unlike Rust's scope-based resource
+cleanup, this JavaScript code makes the cleanup action explicit.
+
+The last `catch` reports an error and sets a nonzero process exit status, so
+a failed assertion makes `npm run test:editor` fail as well. It doesn't quit
+the launcher before the `finally` cleanup has run.
+
+## Run it
+
+From **`rlox/editors/vscode/`**, run:
+
+```sh
+npm install
+npm run check
+npm run test:editor
+```
+
+`npm install` creates `package-lock.json` with the resolved dependency graph.
+Keep it; later clean checkouts can use `npm ci`. `check` type-checks without
+emitting files. The test command builds the JavaScript and starts the editor
+host. Its first run needs network access to download the specified VS Code
+build, and the window can open and close automatically as the test runs.
+
+Look for our check's message:
+
+```text title="Messages from our test code"
+EDITOR CHECK: hello.lox opened as Lox
+Editor integration test passed.
+```
+
+VS Code and the launcher may print other diagnostic messages around these.
+The command should finish with status `0`. The language association and shown
+document are checked through editor APIs; no screenshot is required.
+
+On a Linux machine without a graphical session, this Electron test needs a
+display server. If Xvfb is installed, run `xvfb-run -a npm run test:editor`
+in place of the last command. We'll set up the CI environment later in the
+chapter. On macOS or Windows, run from your normal desktop session.
+
+If downloading the test editor fails, fix the network access and rerun the
+same command; a failed download isn't an editor assertion failure. If the
+check reports the wrong language ID, verify `contributes.languages` and the
+fixture suffix, then rerun. The temporary profile is removed after a normal
+success or failure; the ignored editor cache remains for subsequent runs.
+
+We now have a Lox association and an automated check against a real editor.
+The file may still have plain-looking text: syntax scopes arrive in 9.3.
+Next we'll make comments, pairs and indentation comfortable to edit.
