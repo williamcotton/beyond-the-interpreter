@@ -202,3 +202,8 @@ Section 10.3 is drafted at `src/content/docs/chapter-10/10.3-expression-printer.
 served at `/chapter-10/10.3-expression-printer/`. Its borrowed printer, example and four formatting/ownership tests match the
 manuscript and pass local workspace checks. The section and code are accepted,
 completing Chapter 10.
+
+Section 11.1 is drafted at `src/content/docs/chapter-11/11.1-parse-number.mdx`,
+served at `/chapter-11/11.1-parse-number/`. Its number parser, ranged errors, example and five focused tests match the
+manuscript and are accepted. Formatting, Clippy and all 55 workspace tests
+pass locally.

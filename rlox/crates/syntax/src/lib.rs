@@ -1,4 +1,5 @@
 pub mod expr;
+pub mod parser;
 
 use logos::Logos;
 

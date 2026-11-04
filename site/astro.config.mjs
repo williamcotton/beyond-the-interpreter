@@ -91,6 +91,12 @@ export default defineConfig({
             { label: '10.3 · Print the tree without consuming it', link: '/chapter-10/10.3-expression-printer/' },
           ],
         },
+        {
+          label: 'Chapter 11 · Parsing Expressions by Hand',
+          items: [
+            { label: '11.1 · Parse a number from source', link: '/chapter-11/11.1-parse-number/' },
+          ],
+        },
       ],
       customCss: ['./src/styles/book.css'],
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },
