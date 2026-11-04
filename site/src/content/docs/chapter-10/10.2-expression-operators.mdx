@@ -1,0 +1,374 @@
+---
+title: 10.2 — Connect operands with operators
+slug: chapter-10/10.2-expression-operators
+description: Give unary and binary expressions distinct operators and owned operands, then construct a mixed arithmetic tree.
+prev:
+  link: /chapter-10/10.1-recursive-expressions/
+  label: 10.1 · Give expressions a recursive shape
+next: false
+---
+
+<p className="book-subtitle">Chapter 10 · Representing Expressions</p>
+
+A grouping has one child. What would the tree for `-123` contain? The minus
+sign operates on a number, so we need a node that records both an operation
+and its operand. In `1 + 2`, the operation has two operands instead.
+
+That difference belongs in the tree's shape. We'll extend our expression
+enum to represent both cases, then connect them into `-(1 + 2) * 3`.
+The [expression grammar in Crafting Interpreters](https://craftinginterpreters.com/representing-code.html#a-grammar-for-lox-expressions)
+describes these unary and binary forms; we'll model their arithmetic subset.
+
+Start from [Section 10.1](/chapter-10/10.1-recursive-expressions/), with your
+terminal in the **Rust workspace directory**, containing `Cargo.toml` and
+`crates/`. Our public `expr` module is already connected to the syntax
+library. We'll edit only its expression types and the existing
+`expression_shape` example.
+
+## Give negation one operand
+
+In `-123`, minus is a **unary** operator: it has one operand. We can draw
+that operand underneath the operation:
+
+```text title="Expression tree for -123"
+Unary: Negate
+  │ right operand
+  ▼
+Number: 123
+```
+
+Our scanner already treats the leading minus as its own token. The number
+following it has the spelling `123`. Rust's `f64` can store a negative value,
+but representing the minus operation explicitly follows the structure of
+the Lox expression. Later, its operand can be a grouping or another unary
+expression instead of a number.
+
+First give the operation a name. Append this definition **after the existing
+`Expr` enum** in **`rlox/crates/syntax/src/expr.rs`**, separated by a blank line:
+
+```rust title="rlox/crates/syntax/src/expr.rs · append the unary operator type"
+#[derive(Debug)]
+pub enum UnaryOp {
+    Negate,
+}
+```
+
+`UnaryOp::Negate` describes which unary operation we mean. We keep it separate
+from `SyntaxKind`: a token kind could describe a number or a brace, while a
+unary operator must describe an operation with one operand. The type makes
+that choice explicit.
+
+Add a `Unary` variant inside the existing `Expr` enum, after `Grouping`:
+
+```diff title="rlox/crates/syntax/src/expr.rs · add one owned operand"
+     Number(f64),
+     Grouping(Box<Expr>),
++    Unary {
++        op: UnaryOp,
++        right: Box<Expr>,
++    },
+ }
+```
+
+This variant has **named fields**. The field `op` holds the operator;
+`right` owns the operand through a box. We call it `right` because the
+operand follows the prefix minus in the source. It is still the node's
+only child.
+
+An enum can mix tuple-shaped variants such as `Number(f64)` with variants
+that have named fields. The braces belong to this variant; we haven't
+introduced a separate struct. The Rust Book's
+[enum values](https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html#enum-values)
+show these forms together.
+
+With both edits complete, check the crate:
+
+```sh
+cargo check -p rlox-syntax
+```
+
+It should succeed. Now construct a unary expression in our example.
+Replace its import in **`rlox/crates/syntax/examples/expression_shape.rs`**:
+
+```diff title="rlox/crates/syntax/examples/expression_shape.rs · import the unary operator"
+-use rlox_syntax::expr::Expr;
++use rlox_syntax::expr::{Expr, UnaryOp};
+```
+
+Inside `main`, **after the existing `println!("nested: {nested:?}");` and
+before the closing brace**, leave a blank line and append:
+
+```rust title="rlox/crates/syntax/examples/expression_shape.rs · append negation"
+    let negated = Expr::Unary {
+        op: UnaryOp::Negate,
+        right: Box::new(Expr::Number(123.0)),
+    };
+    println!("negated: {negated:?}");
+```
+
+`Expr::Unary { ... }` constructs the variant by naming its fields.
+`Box::new(Expr::Number(123.0))` creates the child and transfers ownership to
+the new parent. We can now see the operator and its one operand together:
+
+```sh
+cargo run -p rlox-syntax --example expression_shape
+```
+
+After Cargo's messages, expect the earlier output followed by the new line:
+
+```text title="Number, grouping and unary diagnostic output"
+number: Number(123.0)
+grouped: Grouping(Number(123.0))
+nested: Grouping(Grouping(Number(123.0)))
+negated: Unary { op: Negate, right: Number(123.0) }
+```
+
+`Negate` identifies the operation; `right` identifies where its child sits.
+No arithmetic has been performed to produce this output.
+
+## Give binary expressions a left and a right
+
+Addition needs two operands. Multiplication, subtraction and division do
+too, so we'll give them one common **binary** shape. Keeping the operands
+named `left` and `right` preserves their roles: `1 - 2` and `2 - 1` must
+not become the same tree.
+
+Append a second operator enum **after `UnaryOp`**, separated by a blank line,
+in **`expr.rs`**:
+
+```rust title="rlox/crates/syntax/src/expr.rs · append arithmetic binary operators"
+#[derive(Debug)]
+pub enum BinaryOp {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+```
+
+These names select the four arithmetic operations. A subtraction operator
+belongs to `BinaryOp::Subtract`; unary minus belongs to `UnaryOp::Negate`.
+They can share the `-` spelling in Lox while having different roles in the
+tree. Separate operator types prevent a binary operation from being supplied
+as the `op` of a unary node.
+
+Add `Binary` **after `Unary`, inside the `Expr` enum**:
+
+```diff title="rlox/crates/syntax/src/expr.rs · add two owned operands"
+     Unary {
+         op: UnaryOp,
+         right: Box<Expr>,
+     },
++    Binary {
++        left: Box<Expr>,
++        op: BinaryOp,
++        right: Box<Expr>,
++    },
+ }
+```
+
+Each operand is a full expression, owned through its own box. Either child
+can therefore be another operation, a grouping, or a number. As with the
+unary child, indirection keeps the recursive type's layout finite.
+
+Check after completing both edits:
+
+```sh
+cargo check -p rlox-syntax
+```
+
+The check should succeed. We've reached the small expression model needed
+for arithmetic: numbers, grouping, unary operations and binary operations.
+
+## Assemble the expression from its children
+
+Consider `-(1 + 2) * 3`. Its outer operation is multiplication. The left
+operand is a negation of the grouped sum; the right operand is the number
+`3`:
+
+```text title="Owned expression tree for -(1 + 2) * 3"
+Binary: Multiply
+├─ left: Unary: Negate
+│        └─ right: Grouping
+│                  └─ child: Binary: Add
+│                            ├─ left: Number: 1
+│                            └─ right: Number: 2
+└─ right: Number: 3
+```
+
+Each branch names the role of a child. The grouping keeps the addition
+inside the negation. To construct that tree, start with the sum, put it in
+a grouping, make the grouping the operand of negation, then make that unary
+expression the left operand of multiplication.
+
+Extend the example's import again:
+
+```diff title="rlox/crates/syntax/examples/expression_shape.rs · import binary operators"
+-use rlox_syntax::expr::{Expr, UnaryOp};
++use rlox_syntax::expr::{BinaryOp, Expr, UnaryOp};
+```
+
+Inside `main`, **after `println!("negated: {negated:?}");` and before the
+closing brace**, leave a blank line and append:
+
+```rust title="rlox/crates/syntax/examples/expression_shape.rs · append the mixed expression"
+    let sum = Expr::Binary {
+        left: Box::new(Expr::Number(1.0)),
+        op: BinaryOp::Add,
+        right: Box::new(Expr::Number(2.0)),
+    };
+    let grouped_sum = Expr::Grouping(Box::new(sum));
+    let negative_sum = Expr::Unary {
+        op: UnaryOp::Negate,
+        right: Box::new(grouped_sum),
+    };
+    let product = Expr::Binary {
+        left: Box::new(negative_sum),
+        op: BinaryOp::Multiply,
+        right: Box::new(Expr::Number(3.0)),
+    };
+    println!("arithmetic: {product:#?}");
+```
+
+Each binding holds the next completed subtree. `sum` moves into its grouping;
+`grouped_sum` moves into the unary node; `negative_sum` moves into the left
+side of the product. We don't clone any of those values or keep a second
+owner. The Rust Book explains this transfer in
+[variables and moves](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html#variables-and-data-interacting-with-move).
+
+Constructing the tree from the children upward is a convenient order for
+Rust ownership. The tree itself records which expressions contain which
+others. In Chapter 11 we'll teach a parser to choose that structure from
+source text; here we choose it explicitly in the constructors.
+
+`{product:#?}` asks for the **pretty** form of derived `Debug` output.
+The `#` adds indentation and line breaks so this larger structure is easier
+to follow. It still borrows the expression for inspection, and boxes still
+display their children without an extra wrapper.
+
+Run the example again:
+
+```sh
+cargo run -p rlox-syntax --example expression_shape
+```
+
+The first four lines should remain the same. Then expect:
+
+```text title="Additional pretty diagnostic output for the mixed expression"
+arithmetic: Binary {
+    left: Unary {
+        op: Negate,
+        right: Grouping(
+            Binary {
+                left: Number(
+                    1.0,
+                ),
+                op: Add,
+                right: Number(
+                    2.0,
+                ),
+            },
+        ),
+    },
+    op: Multiply,
+    right: Number(
+        3.0,
+    ),
+}
+```
+
+Follow the `left` branch down to the grouped addition and compare it with
+the diagram. The product's `right` branch ends directly at `3.0`. That
+observation checks the shape we built; the program has not computed the
+expression's result.
+
+Finish with the workspace checks:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+The existing scanner and CLI tests should continue to pass, and all-target
+Clippy also checks the extended example. No dependency or module declaration
+changes are needed. Next we'll walk these nodes to print a compact
+representation of the tree ourselves.
+
+<details>
+<summary>Complete resulting expression module</summary>
+
+```rust title="rlox/crates/syntax/src/expr.rs · complete resulting file"
+#[derive(Debug)]
+pub enum Expr {
+    Number(f64),
+    Grouping(Box<Expr>),
+    Unary {
+        op: UnaryOp,
+        right: Box<Expr>,
+    },
+    Binary {
+        left: Box<Expr>,
+        op: BinaryOp,
+        right: Box<Expr>,
+    },
+}
+
+#[derive(Debug)]
+pub enum UnaryOp {
+    Negate,
+}
+
+#[derive(Debug)]
+pub enum BinaryOp {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting expression example</summary>
+
+```rust title="rlox/crates/syntax/examples/expression_shape.rs · complete resulting file"
+use rlox_syntax::expr::{BinaryOp, Expr, UnaryOp};
+
+fn main() {
+    let number = Expr::Number(123.0);
+    println!("number: {number:?}");
+
+    let grouped = Expr::Grouping(Box::new(number));
+    println!("grouped: {grouped:?}");
+
+    let nested = Expr::Grouping(Box::new(grouped));
+    println!("nested: {nested:?}");
+
+    let negated = Expr::Unary {
+        op: UnaryOp::Negate,
+        right: Box::new(Expr::Number(123.0)),
+    };
+    println!("negated: {negated:?}");
+
+    let sum = Expr::Binary {
+        left: Box::new(Expr::Number(1.0)),
+        op: BinaryOp::Add,
+        right: Box::new(Expr::Number(2.0)),
+    };
+    let grouped_sum = Expr::Grouping(Box::new(sum));
+    let negative_sum = Expr::Unary {
+        op: UnaryOp::Negate,
+        right: Box::new(grouped_sum),
+    };
+    let product = Expr::Binary {
+        left: Box::new(negative_sum),
+        op: BinaryOp::Multiply,
+        right: Box::new(Expr::Number(3.0)),
+    };
+    println!("arithmetic: {product:#?}");
+}
+```
+
+</details>

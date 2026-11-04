@@ -191,3 +191,9 @@ served at `/chapter-10/10.1-recursive-expressions/`. Numbers/grouping, the
 recursive-size error and Box recovery are explained through static diagrams
 and a runnable-example route. Matching reader Rust, error/recovery, example output and workspace checks
 pass locally. The section and implementation are accepted.
+
+Section 10.2 is drafted at `src/content/docs/chapter-10/10.2-expression-operators.mdx`,
+served at `/chapter-10/10.2-expression-operators/`. Unary/binary arithmetic
+nodes, operator types and owned subtrees are introduced through incremental
+example edits and a labeled tree. Matching expression types and both example checkpoints pass locally, along
+with workspace formatting, Clippy and tests. The combined endpoint is accepted.
