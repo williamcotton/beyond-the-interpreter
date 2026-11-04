@@ -65,6 +65,12 @@ export default defineConfig({
             { label: '7.5 · Keep strings together', link: '/chapter-7/7.5-strings/' },
           ],
         },
+        {
+          label: 'Chapter 8 · Inspecting Tokens',
+          items: [
+            { label: '8.1 · Show tokens from a file', link: '/chapter-8/8.1-token-command/' },
+          ],
+        },
       ],
       customCss: ['./src/styles/book.css'],
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },

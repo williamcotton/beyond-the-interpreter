@@ -1,0 +1,554 @@
+---
+title: 8.1 — Show tokens from a file
+slug: chapter-8/8.1-token-command
+description: Connect the scanner to a tokens command and inspect kinds, UTF-8 ranges, and original spelling.
+prev:
+  link: /chapter-7/7.5-strings/
+  label: 7.5 · Keep strings together
+next: false
+---
+
+import TokenRanges from '../../../components/TokenRanges';
+
+<p className="book-subtitle">Chapter 8 · Inspecting Tokens</p>
+
+Our scanner understands `print "Hello, Lox!";`, but only its tests can show us
+the tokens. The command-line program still just prints source. Let's connect
+those pieces so we can inspect any Lox file with `rlox tokens FILE`.
+
+Start from [Section 7.5](/chapter-7/7.5-strings/), with your terminal in
+**`rlox/`**. Keep the existing **`hello.lox`** there. We'll edit the text
+library, the app manifest and the app's `main.rs`; the scanner stays as it is.
+
+## One row, one source fragment
+
+Each output row will contain a kind, a half-open byte range and the original
+spelling. For `print "é";` followed by a newline, we want:
+
+```text title="Kinds and locations beside escaped source text"
+Print [0..5) "print"
+Whitespace [5..6) " "
+String [6..10) "\"é\""
+Semicolon [10..11) ";"
+Whitespace [11..12) "\n"
+```
+
+The quotes around the last column help us see spaces and empty spellings.
+The newline appears as `\n` so it doesn't split a row across terminal lines.
+The string's own quotes appear as `\"`. These are display escapes, not new
+Lox escape rules: the underlying source still contains actual quotes and a
+newline.
+
+Select a token to connect its output row with its source bytes. The initial
+selection is the string: its four bytes include both quotes and the two-byte
+`é`.
+
+<TokenRanges client:load />
+
+Offsets describe the original UTF-8 source, not positions in the escaped
+last column. This is why the displayed `\"` still represents one source
+byte. Our scanner retains trivia, so whitespace and comments get rows too.
+
+## Read the endpoints without changing them
+
+We already have `TextRange::slice` for retrieving spelling, but the `start`
+and `end` fields are private. The app needs to read these offsets. Giving it
+methods keeps construction through `TextRange::new` and prevents callers from
+mutating an endpoint into a reversed range.
+
+In **`rlox/crates/text/src/lib.rs`**, insert these methods **inside
+`impl TextRange`, immediately before `slice`**:
+
+```rust title="rlox/crates/text/src/lib.rs · insert before slice"
+pub fn start(self) -> TextSize {
+    self.start
+}
+
+pub fn end(self) -> TextSize {
+    self.end
+}
+```
+
+Both return a `TextSize`. These types already implement `Copy`, so taking
+`self` copies the small range; the caller can still use it afterward. The
+app will read the inner byte count through `TextSize`'s public `.0` field.
+No change to how we validate or slice a range is needed.
+
+## Let the app use the syntax library
+
+Add a local dependency **after the existing Clap entry** in
+**`rlox/crates/app/Cargo.toml`**:
+
+```toml title="rlox/crates/app/Cargo.toml · append under dependencies"
+rlox-syntax = { path = "../syntax" }
+```
+
+The path is relative to the app manifest. The package name uses a hyphen;
+Rust imports its library as `rlox_syntax`. The
+[Cargo Book's path dependency guidance](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-path-dependencies)
+describes this connection. We aren't adding another registry package.
+
+The app coordinates file reading and terminal presentation. Syntax continues
+to own scanning; text owns coordinates. Add this import **after the existing
+Clap import in `rlox/crates/app/src/main.rs`**:
+
+```rust title="rlox/crates/app/src/main.rs · add import"
+use rlox_syntax::scan;
+```
+
+The following command and dispatch edits form one group: complete them and
+the parsing-test adjustments below before running the checks.
+
+Inside `Command`, append this variant **after `Source`**:
+
+```rust title="rlox/crates/app/src/main.rs · append inside Command"
+    /// Display a file's tokens and source ranges.
+    Tokens {
+        /// File whose tokens should be displayed.
+        file: String,
+    },
+```
+
+Clap uses the variant to recognize `tokens` and its field to require one
+filename, following the same derive pattern as `source`. The doc comments
+supply the command and argument descriptions in help.
+
+## Keep the command while borrowing its filename
+
+We now need two decisions: which file to read and what to do with its text.
+In `main`, replace the initial filename match and adjust the read call:
+
+```diff title="rlox/crates/app/src/main.rs · start of main"
+ fn main() -> ExitCode {
+-    let filename = match Cli::parse().command {
+-        Command::Source { file } => file,
++    let command = Cli::parse().command;
++    let filename = match &command {
++        Command::Source { file } | Command::Tokens { file } => file,
+     };
+-    let source = match std::fs::read_to_string(&filename) {
++    let source = match std::fs::read_to_string(filename) {
+```
+
+`match &command` borrows the enum. Each alternative binds `file` as a
+reference to its stored `String`; `|` lets the two variants share that arm.
+We can read the file without moving its name out of the command. Once the
+read/error handling finishes, we can match the command again to choose its
+behavior. The Rust Book's [match discussion](https://doc.rust-lang.org/book/ch06-02-match.html)
+and [borrowing discussion](https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html)
+explain the two ideas being combined here.
+
+Keep the existing `Err` arm and its failure return. Both commands should
+report the same read error for a missing or unreadable file.
+
+## Print the scanner's observations
+
+Replace the single `print!("{source}");` **after the read match** with:
+
+```rust title="rlox/crates/app/src/main.rs · replace the source print"
+    match command {
+        Command::Source { .. } => print!("{source}"),
+        Command::Tokens { .. } => {
+            for token in scan(&source) {
+                let spelling = token
+                    .range
+                    .slice(&source)
+                    .expect("scanner ranges are valid");
+                println!(
+                    "{:?} [{}..{}) {:?}",
+                    token.kind,
+                    token.range.start().0,
+                    token.range.end().0,
+                    spelling
+                );
+            }
+        }
+    }
+```
+
+`Source` retains its original behavior. The `{ .. }` patterns ignore the
+filename fields here because we've already read the file.
+
+For `Tokens`, `scan(&source)` gives us the existing tokens. Each range
+borrows its spelling from that same source through `slice`. The `expect`
+expresses an invariant of our scanner: its ranges must be valid for the
+source it scanned. A lexical `Error` is still a valid range, so malformed
+Lox doesn't trigger this assertion.
+
+The format string uses `{:?}` for the kind and spelling, and `{}` for the
+two numeric offsets. `SyntaxKind` already derives `Debug`, which gives us
+names such as `String` and `Whitespace`. A string slice's debug formatting
+adds quotes and escapes line breaks, quotes and control characters, keeping
+one token on one line. The standard library's
+[formatting documentation](https://doc.rust-lang.org/std/fmt/index.html#formatting-traits)
+explains these format specifiers. This is a human inspection format, not a
+serialized protocol.
+
+Keep the final `ExitCode::SUCCESS`. At this endpoint, a successfully read
+file produces its full listing even when that listing contains `Error`.
+The next section will give lexical errors a failure status.
+
+## Keep argument tests aligned
+
+Adding a variant makes the match in `accepts_source_command` incomplete.
+Add its explicit unexpected-command arm:
+
+```diff title="rlox/crates/app/src/main.rs · accepts_source_command"
+         match cli.command {
+             Command::Source { file } => assert_eq!(file, "hello.lox"),
++            Command::Tokens { .. } => panic!("expected the source command"),
+         }
+```
+
+Append this test **inside the existing `mod tests`**:
+
+```rust title="rlox/crates/app/src/main.rs · append inside mod tests"
+#[test]
+fn accepts_tokens_command() {
+    let cli = Cli::try_parse_from(["rlox", "tokens", "hello.lox"])
+        .expect("tokens with a filename should parse");
+
+    match cli.command {
+        Command::Tokens { file } => assert_eq!(file, "hello.lox"),
+        Command::Source { .. } => panic!("expected the tokens command"),
+    }
+}
+```
+
+Replace the existing `rejects_missing_filename` and `rejects_extra_filenames`
+tests with these versions, keeping their names and attributes:
+
+```rust title="rlox/crates/app/src/main.rs · replace the two filename tests"
+#[test]
+fn rejects_missing_filename() {
+    for command in ["source", "tokens"] {
+        assert!(Cli::try_parse_from(["rlox", command]).is_err());
+    }
+}
+
+#[test]
+fn rejects_extra_filenames() {
+    for command in ["source", "tokens"] {
+        assert!(Cli::try_parse_from(["rlox", command, "hello.lox", "other.lox"]).is_err());
+    }
+}
+```
+
+Both commands accept exactly one filename. Leave `requires_known_command`
+and `help_is_a_successful_request` unchanged. These tests check argument
+parsing; we'll test the real executable's output later in this chapter.
+
+## Inspect a real file
+
+From **`rlox/`**, run the checks, then the new command:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run --quiet -- tokens hello.lox
+```
+
+For the existing `hello.lox`, including its final newline, expect:
+
+```text title="Output from tokens hello.lox"
+Print [0..5) "print"
+Whitespace [5..6) " "
+String [6..19) "\"Hello, Lox!\""
+Semicolon [19..20) ";"
+Whitespace [20..21) "\n"
+```
+
+Cargo records the new app-to-syntax edge in `Cargo.lock`; the existing
+registry versions should stay unchanged. Don't edit the lockfile by hand.
+
+Check that the earlier command and help still work:
+
+```sh
+cargo run --quiet -- source hello.lox
+cargo run --quiet -- --help
+cargo run --quiet -- tokens --help
+```
+
+`source` should still print `print "Hello, Lox!";` with its final newline.
+Top-level help now includes both `source` and `tokens`; the token command's
+help requires `<FILE>`.
+
+To reproduce the interactive's UTF-8 example, create **`rlox/token-demo.lox`**
+with this command, which includes a final newline:
+
+```sh
+printf 'print "é";\n' > token-demo.lox
+cargo run --quiet -- tokens token-demo.lox
+```
+
+Its rows should match the opening example, including `String [6..10)`.
+Keep the new sample as a small inspection input. The command now lets us
+observe the actual scanner from a file, with spelling and byte ranges side
+by side.
+
+<details>
+<summary>Text library · complete resulting file</summary>
+
+```rust title="rlox/crates/text/src/lib.rs"
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextSize(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextRange {
+    start: TextSize,
+    end: TextSize,
+}
+
+impl TextRange {
+    pub fn new(start: TextSize, end: TextSize) -> Option<Self> {
+        if start.0 > end.0 {
+            return None;
+        }
+
+        Some(Self { start, end })
+    }
+
+    pub fn start(self) -> TextSize {
+        self.start
+    }
+
+    pub fn end(self) -> TextSize {
+        self.end
+    }
+
+    pub fn slice(self, source: &str) -> Option<&str> {
+        source.get(self.start.0..self.end.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyntaxOrigin {
+    pub file: FileId,
+    pub range: TextRange,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FileId, SyntaxOrigin, TextRange, TextSize};
+
+    #[test]
+    fn selects_ascii_fragment() {
+        let word = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+
+        assert_eq!(word.slice("print 42;"), Some("print"));
+    }
+
+    #[test]
+    fn rejects_reversed_range() {
+        assert_eq!(TextRange::new(TextSize(5), TextSize(0)), None);
+    }
+
+    #[test]
+    fn respects_utf8_boundaries() {
+        let source = "aé!";
+        let accent = TextRange::new(TextSize(1), TextSize(3)).expect("ordered range");
+        let split = TextRange::new(TextSize(1), TextSize(2)).expect("ordered range");
+
+        assert_eq!(accent.slice(source), Some("é"));
+        assert_eq!(split.slice(source), None);
+    }
+
+    #[test]
+    fn checks_bounds_and_empty_ranges() {
+        let source = "aé!";
+        let end = TextSize(source.len());
+        let eof = TextRange::new(end, end).expect("ordered range");
+        let beyond = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+        let interior = TextRange::new(TextSize(2), TextSize(2)).expect("ordered range");
+
+        assert_eq!(eof.slice(source), Some(""));
+        assert_eq!(beyond.slice(source), None);
+        assert_eq!(interior.slice(source), None);
+    }
+
+    #[test]
+    fn same_range_in_different_files_has_different_origins() {
+        let range = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+        let first = SyntaxOrigin {
+            file: FileId(0),
+            range,
+        };
+        let second = SyntaxOrigin {
+            file: FileId(1),
+            range,
+        };
+
+        assert_eq!(first.range, second.range);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn selects_text_from_identified_source() {
+        let first_source = "print 42;";
+        let second_source = "while (true) {}";
+        let origin = SyntaxOrigin {
+            file: FileId(1),
+            range: TextRange::new(TextSize(0), TextSize(5)).expect("ordered range"),
+        };
+
+        let source = match origin.file {
+            FileId(0) => first_source,
+            FileId(1) => second_source,
+            _ => panic!("file ID was not assigned in this example"),
+        };
+
+        assert_eq!(origin.range.slice(source), Some("while"));
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>App manifest · complete resulting file</summary>
+
+```toml title="rlox/crates/app/Cargo.toml"
+[package]
+name = "rlox-app"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "rlox"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "=4.6.7", features = ["derive"] }
+rlox-syntax = { path = "../syntax" }
+```
+
+</details>
+
+<details>
+<summary>App entry point and tests · complete resulting file</summary>
+
+```rust title="rlox/crates/app/src/main.rs"
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+use rlox_syntax::scan;
+
+#[derive(Parser)]
+#[command(name = "rlox", about = "Inspect Lox source files")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Display a file's source text.
+    Source {
+        /// File whose text should be displayed.
+        file: String,
+    },
+    /// Display a file's tokens and source ranges.
+    Tokens {
+        /// File whose tokens should be displayed.
+        file: String,
+    },
+}
+
+fn main() -> ExitCode {
+    let command = Cli::parse().command;
+    let filename = match &command {
+        Command::Source { file } | Command::Tokens { file } => file,
+    };
+    let source = match std::fs::read_to_string(filename) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("rlox: could not read '{filename}': {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match command {
+        Command::Source { .. } => print!("{source}"),
+        Command::Tokens { .. } => {
+            for token in scan(&source) {
+                let spelling = token
+                    .range
+                    .slice(&source)
+                    .expect("scanner ranges are valid");
+                println!(
+                    "{:?} [{}..{}) {:?}",
+                    token.kind,
+                    token.range.start().0,
+                    token.range.end().0,
+                    spelling
+                );
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn accepts_source_command() {
+        let cli = Cli::try_parse_from(["rlox", "source", "hello.lox"])
+            .expect("source with a filename should parse");
+
+        match cli.command {
+            Command::Source { file } => assert_eq!(file, "hello.lox"),
+            Command::Tokens { .. } => panic!("expected the source command"),
+        }
+    }
+
+    #[test]
+    fn requires_known_command() {
+        assert!(Cli::try_parse_from(["rlox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "hello.lox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "unknown", "hello.lox"]).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_filename() {
+        for command in ["source", "tokens"] {
+            assert!(Cli::try_parse_from(["rlox", command]).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_extra_filenames() {
+        for command in ["source", "tokens"] {
+            assert!(Cli::try_parse_from(["rlox", command, "hello.lox", "other.lox"]).is_err());
+        }
+    }
+
+    #[test]
+    fn help_is_a_successful_request() {
+        let help = Cli::try_parse_from(["rlox", "--help"])
+            .err()
+            .expect("help should stop parsing");
+
+        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+        assert_eq!(help.exit_code(), 0);
+    }
+
+    #[test]
+    fn accepts_tokens_command() {
+        let cli = Cli::try_parse_from(["rlox", "tokens", "hello.lox"])
+            .expect("tokens with a filename should parse");
+
+        match cli.command {
+            Command::Tokens { file } => assert_eq!(file, "hello.lox"),
+            Command::Source { .. } => panic!("expected the tokens command"),
+        }
+    }
+}
+```
+
+</details>

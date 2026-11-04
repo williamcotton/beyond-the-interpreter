@@ -16,6 +16,14 @@ impl TextRange {
         Some(Self { start, end })
     }
 
+    pub fn start(self) -> TextSize {
+        self.start
+    }
+
+    pub fn end(self) -> TextSize {
+        self.end
+    }
+
     pub fn slice(self, source: &str) -> Option<&str> {
         source.get(self.start.0..self.end.0)
     }

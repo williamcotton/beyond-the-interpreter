@@ -134,3 +134,9 @@ Section 7.5 is drafted at `src/content/docs/chapter-7/7.5-strings.mdx`, served
 at `/chapter-7/7.5-strings/`. Quoted strings, multiline contents and unfinished
 input and their matching Rust/ordered reader-route checks are accepted,
 completing Chapter 7.
+
+Section 8.1 is drafted at `src/content/docs/chapter-8/8.1-token-command.mdx`,
+served at `/chapter-8/8.1-token-command/`. The token-command text and fixed
+UTF-8 range interactive have approved text. Matching Rust, ordered commands
+and native output-to-fixture comparisons pass; the section and inspector
+are accepted.

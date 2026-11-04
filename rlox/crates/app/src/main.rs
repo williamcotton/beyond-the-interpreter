@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use rlox_syntax::scan;
 
 #[derive(Parser)]
 #[command(name = "rlox", about = "Inspect Lox source files")]
@@ -16,20 +17,43 @@ enum Command {
         /// File whose text should be displayed.
         file: String,
     },
+    /// Display a file's tokens and source ranges.
+    Tokens {
+        /// File whose tokens should be displayed.
+        file: String,
+    },
 }
 
 fn main() -> ExitCode {
-    let filename = match Cli::parse().command {
-        Command::Source { file } => file,
+    let command = Cli::parse().command;
+    let filename = match &command {
+        Command::Source { file } | Command::Tokens { file } => file,
     };
-    let source = match std::fs::read_to_string(&filename) {
+    let source = match std::fs::read_to_string(filename) {
         Ok(source) => source,
         Err(error) => {
             eprintln!("rlox: could not read '{filename}': {error}");
             return ExitCode::FAILURE;
         }
     };
-    print!("{source}");
+    match command {
+        Command::Source { .. } => print!("{source}"),
+        Command::Tokens { .. } => {
+            for token in scan(&source) {
+                let spelling = token
+                    .range
+                    .slice(&source)
+                    .expect("scanner ranges are valid");
+                println!(
+                    "{:?} [{}..{}) {:?}",
+                    token.kind,
+                    token.range.start().0,
+                    token.range.end().0,
+                    spelling
+                );
+            }
+        }
+    }
     ExitCode::SUCCESS
 }
 
@@ -45,6 +69,7 @@ mod tests {
 
         match cli.command {
             Command::Source { file } => assert_eq!(file, "hello.lox"),
+            Command::Tokens { .. } => panic!("expected the source command"),
         }
     }
 
@@ -57,12 +82,16 @@ mod tests {
 
     #[test]
     fn rejects_missing_filename() {
-        assert!(Cli::try_parse_from(["rlox", "source"]).is_err());
+        for command in ["source", "tokens"] {
+            assert!(Cli::try_parse_from(["rlox", command]).is_err());
+        }
     }
 
     #[test]
     fn rejects_extra_filenames() {
-        assert!(Cli::try_parse_from(["rlox", "source", "hello.lox", "other.lox"]).is_err());
+        for command in ["source", "tokens"] {
+            assert!(Cli::try_parse_from(["rlox", command, "hello.lox", "other.lox"]).is_err());
+        }
     }
 
     #[test]
@@ -73,5 +102,16 @@ mod tests {
 
         assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
         assert_eq!(help.exit_code(), 0);
+    }
+
+    #[test]
+    fn accepts_tokens_command() {
+        let cli = Cli::try_parse_from(["rlox", "tokens", "hello.lox"])
+            .expect("tokens with a filename should parse");
+
+        match cli.command {
+            Command::Tokens { file } => assert_eq!(file, "hello.lox"),
+            Command::Source { .. } => panic!("expected the tokens command"),
+        }
     }
 }
