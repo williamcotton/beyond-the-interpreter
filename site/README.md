@@ -222,3 +222,8 @@ Section 11.4 is drafted at `src/content/docs/chapter-11/11.4-parse-factors.mdx`,
 served at `/chapter-11/11.4-parse-factors/`. Its multiplicative loop and binary-tree height checks match the implementation
 and are accepted. Example output, formatting, Clippy and all 69 workspace
 tests pass locally.
+
+Section 11.5 is drafted at `src/content/docs/chapter-11/11.5-parse-terms.mdx`,
+served at `/chapter-11/11.5-parse-terms/`. Its arithmetic parser and source-loss/error examples match the implementation
+and are accepted, completing Chapter 11. Example output, formatting, Clippy
+and all 74 workspace tests pass locally.

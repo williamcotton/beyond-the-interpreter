@@ -61,7 +61,34 @@ impl<'src> Parser<'src> {
     }
 
     fn expression(&mut self, nesting: usize) -> Result<Expr, ParseError> {
-        self.factor(nesting)
+        self.term(nesting)
+    }
+
+    fn term(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        let mut expr = self.factor(nesting)?;
+        let mut height = tree_height(&expr);
+
+        while let Some(token) = self.peek() {
+            let op = match token.kind {
+                SyntaxKind::Plus => BinaryOp::Add,
+                SyntaxKind::Minus => BinaryOp::Subtract,
+                _ => break,
+            };
+            self.bump();
+            let right = self.factor(nesting)?;
+            let next_height = 1 + height.max(tree_height(&right));
+            if nesting + next_height > MAX_NESTING {
+                return Err(error_at(token, "expression nesting limit exceeded"));
+            }
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op,
+                right: Box::new(right),
+            };
+            height = next_height;
+        }
+
+        Ok(expr)
     }
 
     fn factor(&mut self, nesting: usize) -> Result<Expr, ParseError> {
@@ -449,5 +476,91 @@ mod tests {
         assert_eq!(error.message, "expression nesting limit exceeded");
         assert_eq!(error.range.start().0, operator);
         assert_eq!(error.range.end().0, operator + 1);
+    }
+
+    #[test]
+    fn parses_additive_precedence_associativity_and_unary_operands() {
+        for (source, expected) in [
+            ("1 + 2 * 3", "(+ 1 (* 2 3))"),
+            ("(1 + 2) * 3", "(* (group (+ 1 2)) 3)"),
+            ("8 - 3 - 1", "(- (- 8 3) 1)"),
+            ("8 + 3 - 1", "(- (+ 8 3) 1)"),
+            ("1--2", "(- 1 (- 2))"),
+            ("1+-2", "(+ 1 (- 2))"),
+            ("-(1 + 2) * 3", "(* (- (group (+ 1 2))) 3)"),
+            ("1 + 2 * 3 - 4 / 2", "(- (+ 1 (* 2 3)) (/ 4 2))"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn reports_additive_operand_and_grouping_errors() {
+        for (source, message, start, end) in [
+            ("1 +", "expected an expression", 3, 3),
+            ("1 + +2", "expected an expression", 4, 5),
+            ("1 + é", "invalid token", 4, 6),
+            ("(1 + 2", "expected ')'", 6, 6),
+            ("1 + 2 3", "expected end of input", 6, 7),
+            ("1 + (2 * )", "expected an expression", 9, 10),
+        ] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+
+    #[test]
+    fn numeric_spelling_and_trivia_do_not_survive_in_the_ast() {
+        for source in ["1 + 2 * 3", " 001.0 // first\n + 02.00 * 3"] {
+            assert_eq!(parse(source).unwrap().to_prefix(), "(+ 1 (* 2 3))");
+        }
+    }
+
+    #[test]
+    fn bounds_the_height_of_an_additive_chain() {
+        let at_limit = format!("1{}", " + 1".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured additive height is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}1{}",
+                "(+ ".repeat(MAX_NESTING),
+                " 1)".repeat(MAX_NESTING)
+            )
+        );
+
+        let error = parse(&format!("{at_limit} + 1")).unwrap_err();
+        let operator = 2 + 4 * MAX_NESTING;
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, operator);
+        assert_eq!(error.range.end().0, operator + 1);
+    }
+
+    #[test]
+    fn includes_factors_and_enclosing_groups_in_the_sum_budget() {
+        let factors = " * 1".repeat(MAX_NESTING - 1);
+        let sums = " + 1".repeat(MAX_NESTING - 1);
+        for source in [
+            format!("1{factors} + 1"),
+            format!("1 + 1{factors}"),
+            format!("(1{sums})"),
+        ] {
+            assert!(parse(&source).is_ok(), "{source}");
+        }
+
+        let factors = " * 1".repeat(MAX_NESTING);
+        let sums = " + 1".repeat(MAX_NESTING);
+        for (source, operator) in [
+            (format!("1{factors} + 1"), 2 + 4 * MAX_NESTING),
+            (format!("1 + 1{factors}"), 2),
+            (format!("(1{sums})"), 3 + 4 * (MAX_NESTING - 1)),
+        ] {
+            let error = parse(&source).unwrap_err();
+            assert_eq!(error.message, "expression nesting limit exceeded");
+            assert_eq!(error.range.start().0, operator);
+            assert_eq!(error.range.end().0, operator + 1);
+        }
     }
 }

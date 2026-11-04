@@ -98,6 +98,7 @@ export default defineConfig({
             { label: '11.2 · Parse nested parentheses', link: '/chapter-11/11.2-parse-grouping/' },
             { label: '11.3 · Parse unary negation', link: '/chapter-11/11.3-parse-unary/' },
             { label: '11.4 · Chain multiplication and division', link: '/chapter-11/11.4-parse-factors/' },
+            { label: '11.5 · Put addition around multiplication', link: '/chapter-11/11.5-parse-terms/' },
           ],
         },
       ],
