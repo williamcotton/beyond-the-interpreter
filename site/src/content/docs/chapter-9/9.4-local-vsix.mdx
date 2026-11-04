@@ -1,0 +1,599 @@
+---
+title: 9.4 — Install the extension we packaged
+slug: chapter-9/9.4-local-vsix
+description: Package a small local VSIX and reuse real-editor checks against its installation in a fresh profile.
+prev:
+  link: /chapter-9/9.3-syntax-highlighting/
+  label: 9.3 · Give source its lexical colors
+next: false
+---
+
+<p className="book-subtitle">Chapter 9 · Giving Lox an Editor</p>
+
+Our development host can load files straight from the project. A package
+could accidentally leave out the grammar or configuration while all those
+tests still pass. Let's build an installable archive, then run our existing
+editor assertions against the installed copy.
+
+Start from [Section 9.3](/chapter-9/9.3-syntax-highlighting/), with your
+terminal in **`rlox/editors/vscode/`**. We'll package locally and install only
+into a disposable test profile. The extension's language behavior and Rust
+code stay as they are.
+
+## Choose what ships
+
+VS Code's installable extension format is **VSIX**: an archive containing the
+extension files and installation metadata. The
+[official packaging guide](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#packaging-extensions)
+describes creating one with `vsce package`.
+
+Our extension is declarative. It needs its manifest, language configuration
+and grammar, plus a README describing the package. Its TypeScript is test
+code; neither that source nor its compiled output belongs in this archive.
+
+Create **`README.md`** inside the extension directory:
+
+```md title="rlox/editors/vscode/README.md"
+# Rlox — Lox Language
+
+Lox file recognition, comments, pairs, simple brace indentation and TextMate
+syntax highlighting for Beyond the Interpreter. Colors follow your theme.
+This extension does not yet connect to a language server.
+
+Build a local VSIX with `npm run package`. Run `npm run test:installed` from
+the source checkout to test the packaged extension in a disposable VS Code
+profile. That command leaves your usual editor profile unchanged.
+```
+
+In **`package.json`**, add this top-level `files` array **after `type`**:
+
+```diff title="rlox/editors/vscode/package.json · package contents"
+-  "type": "commonjs"
++  "type": "commonjs",
++  "files": [
++    "package.json",
++    "README.md",
++    "language-configuration.json",
++    "syntaxes/lox.tmLanguage.json"
++  ]
+```
+
+This is the packager's explicit allowlist. Tests, fixtures, editor downloads,
+manual launch settings and development dependencies stay outside the shipped
+extension. We use `files` rather than combining it with `.vscodeignore`.
+
+Add the packaging tool after the existing Oniguruma entry in
+`devDependencies`:
+
+```diff title="rlox/editors/vscode/package.json · packaging dependency"
+-    "vscode-oniguruma": "2.0.1"
++    "vscode-oniguruma": "2.0.1",
++    "@vscode/vsce": "4.1.0"
+```
+
+It is a pinned development tool. The extension doesn't load it at runtime.
+This release requests an older glob-matching dependency; the
+[patched minimatch release](https://github.com/advisories/GHSA-g3hv-75wg-m249)
+fixes a resource-exhaustion issue. Add a top-level scoped override **after
+the `files` array**:
+
+```diff title="rlox/editors/vscode/package.json · patched packager dependency"
+     "syntaxes/lox.tmLanguage.json"
+-  ]
++  ],
++  "overrides": {
++    "@vscode/vsce": {
++      "minimatch": "11.0.1"
++    }
++  }
+```
+
+An [npm override](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#overrides)
+selects a dependency version for the named parent package.
+This one is limited to the packager; it doesn't change the extension's
+runtime behavior. Our package/content/install checks below exercise that
+tool pairing.
+
+Add these entries **after the existing `test` script**, with the comma shown:
+
+```diff title="rlox/editors/vscode/package.json · package and installed-test scripts"
+-    "test": "npm run build && node --test out/test/grammar.test.js"
++    "test": "npm run build && node --test out/test/grammar.test.js",
++    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out rlox-0.1.0.vsix",
++    "test:installed": "npm run build && node out/test/runEditor.js --installed"
+```
+
+`--no-dependencies` avoids collecting runtime npm dependencies for this
+four-file declarative package. The other two flags allow our existing local
+metadata, which has no repository URL or license file; we retain its local
+publisher identity and `UNLICENSED` value. They don't publish the extension
+or create a Marketplace account. The [vsce project](https://github.com/microsoft/vscode-vsce)
+documents the packaging tool.
+
+The archive name includes our current version. Keep the output name and the
+installed test's expected version aligned when deliberately changing versions
+later. Packaging doesn't need to compile the tests, since no test JavaScript
+is shipped.
+
+Append this line to **`.gitignore`**:
+
+```text title="rlox/editors/vscode/.gitignore · append archive pattern"
+*.vsix
+```
+
+The generated archive is a local build artifact. Keep the source and lockfile
+as the reproducible route to it.
+
+## Let the launcher choose a mode
+
+Development tests should keep working without an archive. The new installed
+mode will install the VSIX and run the same host checks. Start by replacing
+**the imports at the top of `test/runEditor.ts`** with:
+
+```ts title="rlox/editors/vscode/test/runEditor.ts · replace imports"
+import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { downloadAndUnzipVSCode, runTests, runVSCodeCommand } from '@vscode/test-electron';
+```
+
+Inside `main`, keep `root`, then replace the existing `profile` declaration
+with this block:
+
+```ts title="rlox/editors/vscode/test/runEditor.ts · replace profile declaration"
+  const installed = process.argv.includes('--installed');
+  const profile = await mkdtemp(path.join(os.tmpdir(), 'rlox-editor-'));
+  const profileArgs = [
+    '--user-data-dir', path.join(profile, 'user'),
+    '--extensions-dir', path.join(profile, 'extensions'),
+  ];
+```
+
+`--installed` is an argument to our Node script, not to VS Code. Both modes
+use fresh user-data and extensions directories. Keeping `profileArgs` in one
+place makes installation and the eventual host use the same locations.
+
+Insert the following **at the start of the existing `try` block, before
+`await runTests(...)`**:
+
+```ts title="rlox/editors/vscode/test/runEditor.ts · insert inside try"
+const version = process.env.RLOX_VSCODE_VERSION ?? '1.128.0';
+const executable = await downloadAndUnzipVSCode(version);
+let developmentPath = root;
+
+if (installed) {
+  await runVSCodeCommand([
+    ...profileArgs,
+    '--install-extension', path.join(root, 'rlox-0.1.0.vsix'),
+    '--force',
+  ], { version });
+  const listed = await runVSCodeCommand([
+    ...profileArgs, '--list-extensions', '--show-versions',
+  ], { version });
+  assert.ok(listed.stdout.split(/\r?\n/).includes('beyond-the-interpreter-local.rlox@0.1.0'));
+
+  developmentPath = path.join(profile, 'test-driver');
+  await mkdir(developmentPath);
+  await writeFile(path.join(developmentPath, 'package.json'), JSON.stringify({
+    name: 'rlox-test-driver',
+    publisher: 'local-test',
+    version: '0.0.0',
+    engines: { vscode: '^1.128.0' },
+  }));
+}
+```
+
+We download or reuse the same pinned editor build for both operations.
+`runVSCodeCommand` invokes that build's extension-management CLI, using our
+explicit profile directories. It rejects if the command fails. We then list
+the extensions in that same profile and check the exact ID and version.
+The [test-electron project](https://github.com/microsoft/vscode-test)
+provides these CLI and host-testing helpers.
+
+Why create a second development directory? VS Code uses a development host
+to execute our test entry point. If we pointed it at `root` in installed
+mode, it could load the source extension instead of the VSIX. The generated
+`test-driver` manifest contributes no Lox language, configuration or grammar.
+It exists only to let the host run our checkout's test code while the
+installed package supplies Lox support.
+
+All the driver's required content is in the `writeFile` call above. It's
+created inside the disposable profile and removed with it; it isn't another
+project file or a shipped extension component.
+
+## Load the installed contribution, not the source copy
+
+Update the existing `runTests` call as follows. Leave its remaining launch
+arguments and the `finally` cleanup unchanged:
+
+```diff title="rlox/editors/vscode/test/runEditor.ts · host mode options"
+     await runTests({
+-      version: process.env.RLOX_VSCODE_VERSION ?? '1.128.0',
+-      extensionDevelopmentPath: root,
++      vscodeExecutablePath: executable,
++      extensionDevelopmentPath: developmentPath,
+       extensionTestsPath: path.join(__dirname, 'editor.js'),
++      extensionTestsEnv: {
++        RLOX_INSTALLED_EXTENSIONS: installed ? path.join(profile, 'extensions') : '',
++      },
+       launchArgs: [
+-        '--user-data-dir', path.join(profile, 'user'),
+-        '--extensions-dir', path.join(profile, 'extensions'),
+-        '--disable-extensions',
++        ...profileArgs,
++        ...(installed ? [] : ['--disable-extensions']),
+```
+
+The installed test must enable installed extensions, otherwise it would
+disable the very package it just installed. Its fresh extensions directory
+contains our VSIX rather than the reader's personal extensions. Development
+mode still disables installed extensions and loads the source directory.
+
+`extensionTestsEnv` passes the expected installation directory into the host
+check. An empty value explicitly chooses development mode, even if the parent
+shell happened to contain this environment variable.
+
+Replace the success message after `runTests`:
+
+```diff title="rlox/editors/vscode/test/runEditor.ts · mode result"
+-    console.log('Editor integration test passed.');
++    console.log(installed ? 'Installed VSIX test passed.' : 'Editor integration test passed.');
+```
+
+The existing `finally` still removes the profile after the editor exits, on
+normal success or failure. The downloaded editor cache is retained as before.
+
+## Assert which copy the editor found
+
+In **`test/editor.ts`**, replace the two assertions immediately after
+`getExtension(...)` with:
+
+```ts title="rlox/editors/vscode/test/editor.ts · replace identity assertions"
+  assert.ok(extension, 'the Lox extension must be registered');
+  const installedExtensions = process.env.RLOX_INSTALLED_EXTENSIONS;
+  if (installedExtensions) {
+    assert.equal(path.dirname(extension.extensionPath), installedExtensions);
+    assert.equal(extension.packageJSON.version, '0.1.0');
+    console.log('EDITOR CHECK: installed VSIX provides Lox');
+  } else {
+    assert.equal(extension.extensionPath, root);
+  }
+```
+
+In installed mode, the extension's directory must be directly inside the
+expected temporary extensions directory, and its version must match the
+archive. In development mode, it must still be our checkout root.
+
+Keep all the later document and editing assertions unchanged. The fixture
+and test code come from the checkout; the registered Lox contribution must
+come from the installed archive. This lets us omit development fixtures and
+test JavaScript from the VSIX while still testing the behavior it provides.
+
+## Build and inspect the archive
+
+From **`rlox/editors/vscode/`**, run:
+
+```sh
+npm install
+npm run check
+npm test
+npx --no-install vsce ls --no-dependencies
+npm run package
+unzip -l rlox-0.1.0.vsix
+```
+
+Keep the generated lockfile update for the packaging tool. The type and
+grammar checks should pass. `vsce ls` previews the selected project files;
+`unzip -l` inspects the archive actually produced. If your shell doesn't
+provide `unzip`, use a ZIP archive viewer to inspect this local VSIX.
+
+The extension payload should be exactly:
+
+```text title="Expected files under the archive's extension directory"
+extension/package.json
+extension/readme.md
+extension/language-configuration.json
+extension/syntaxes/lox.tmLanguage.json
+```
+
+The packager normalizes the README entry to lowercase `readme.md`; keep the
+source file named `README.md`. The archive also contains VSIX metadata such as `extension.vsixmanifest` and
+`[Content_Types].xml`. There should be no `test/`, `fixtures/`, `out/`,
+`node_modules/` or `.vscode-test/` payload. A successful package command alone
+doesn't prove that this content is correct, so inspect the filenames.
+
+## Test both loading paths
+
+Run:
+
+```sh
+npm run test:editor
+npm run test:installed
+```
+
+The first command should still pass the seven development-host observations
+and end with `Editor integration test passed.` The second installs the VSIX
+in a new profile and should additionally report:
+
+```text title="Installed-mode identity and final result"
+EDITOR CHECK: installed VSIX provides Lox
+Installed VSIX test passed.
+```
+
+Between those messages, the same recognition, comment, pair, quote,
+indentation and scope-exclusion assertions must pass. Both commands should
+return status `0`. On headless Linux, run each editor command with
+`xvfb-run -a` as before.
+
+Both commands use VS Code **1.128.0** by default, so we exercise the editor
+minimum declared in the manifest. Also check a newer pinned host:
+
+```sh
+RLOX_VSCODE_VERSION=1.144.1 npm run test:editor
+RLOX_VSCODE_VERSION=1.144.1 npm run test:installed
+```
+
+`RLOX_VSCODE_VERSION` selects the same build for download, installation and
+test execution. The generated test driver accepts our minimum editor too.
+A newer-host pass alone wouldn't establish that the minimum works.
+
+VS Code forks have their own application versions and underlying VS Code
+versions. For example, a Cursor build based on VS Code 1.128.0 meets our
+`^1.128.0` requirement; its Cursor version number isn't what this manifest
+range checks. Check your editor's underlying version before installing the
+VSIX. Updating the packager doesn't change this compatibility requirement.
+
+Rebuild the archive after changing a contribution file before rerunning the
+installed test. Development mode reads current source; installed mode reads
+the VSIX you built. If only the installed check fails, compare the package's
+contents and version with the source instead of assuming the editor actions
+are wrong.
+
+We now have an installable local extension and evidence that its packaged
+contributions work in VS Code. No Marketplace publication or personal-profile
+installation is part of these commands. Next we'll automate the checks in CI.
+
+<details>
+<summary>Complete resulting extension manifest</summary>
+
+```json title="rlox/editors/vscode/package.json · complete resulting file"
+{
+  "name": "rlox",
+  "displayName": "Rlox — Lox Language",
+  "description": "Lox language support for Beyond the Interpreter.",
+  "version": "0.1.0",
+  "publisher": "beyond-the-interpreter-local",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.128.0",
+    "node": ">=22.23.4"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test:editor": "npm run build && node out/test/runEditor.js",
+    "test": "npm run build && node --test out/test/grammar.test.js",
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out rlox-0.1.0.vsix",
+    "test:installed": "npm run build && node out/test/runEditor.js --installed"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "lox",
+        "aliases": [
+          "Lox",
+          "lox"
+        ],
+        "extensions": [
+          ".lox"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lox",
+        "scopeName": "source.lox",
+        "path": "./syntaxes/lox.tmLanguage.json"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/vscode": "1.125.0",
+    "@vscode/test-electron": "3.1.0",
+    "typescript": "6.0.3",
+    "vscode-textmate": "9.3.2",
+    "vscode-oniguruma": "2.0.1",
+    "@vscode/vsce": "4.1.0"
+  },
+  "type": "commonjs",
+  "files": [
+    "package.json",
+    "README.md",
+    "language-configuration.json",
+    "syntaxes/lox.tmLanguage.json"
+  ],
+  "overrides": {
+    "@vscode/vsce": {
+      "minimatch": "11.0.1"
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting test launcher</summary>
+
+```ts title="rlox/editors/vscode/test/runEditor.ts · complete resulting file"
+import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { downloadAndUnzipVSCode, runTests, runVSCodeCommand } from '@vscode/test-electron';
+
+async function main(): Promise<void> {
+  const root = path.resolve(__dirname, '../..');
+  const installed = process.argv.includes('--installed');
+  const profile = await mkdtemp(path.join(os.tmpdir(), 'rlox-editor-'));
+  const profileArgs = [
+    '--user-data-dir', path.join(profile, 'user'),
+    '--extensions-dir', path.join(profile, 'extensions'),
+  ];
+
+  try {
+    const version = process.env.RLOX_VSCODE_VERSION ?? '1.128.0';
+    const executable = await downloadAndUnzipVSCode(version);
+    let developmentPath = root;
+
+    if (installed) {
+      await runVSCodeCommand([
+        ...profileArgs,
+        '--install-extension', path.join(root, 'rlox-0.1.0.vsix'),
+        '--force',
+      ], { version });
+      const listed = await runVSCodeCommand([
+        ...profileArgs, '--list-extensions', '--show-versions',
+      ], { version });
+      assert.ok(listed.stdout.split(/\r?\n/).includes('beyond-the-interpreter-local.rlox@0.1.0'));
+
+      developmentPath = path.join(profile, 'test-driver');
+      await mkdir(developmentPath);
+      await writeFile(path.join(developmentPath, 'package.json'), JSON.stringify({
+        name: 'rlox-test-driver',
+        publisher: 'local-test',
+        version: '0.0.0',
+        engines: { vscode: '^1.128.0' },
+      }));
+    }
+
+    await runTests({
+      vscodeExecutablePath: executable,
+      extensionDevelopmentPath: developmentPath,
+      extensionTestsPath: path.join(__dirname, 'editor.js'),
+      extensionTestsEnv: {
+        RLOX_INSTALLED_EXTENSIONS: installed ? path.join(profile, 'extensions') : '',
+      },
+      launchArgs: [
+        ...profileArgs,
+        ...(installed ? [] : ['--disable-extensions']),
+        '--skip-welcome',
+        '--skip-release-notes',
+        '--disable-gpu',
+      ],
+    });
+    console.log(installed ? 'Installed VSIX test passed.' : 'Editor integration test passed.');
+  } finally {
+    await rm(profile, { recursive: true, force: true });
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
+```
+
+</details>
+
+<details>
+<summary>Complete resulting host test</summary>
+
+```ts title="rlox/editors/vscode/test/editor.ts · complete resulting file"
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import * as vscode from 'vscode';
+
+export async function run(): Promise<void> {
+  const root = path.resolve(__dirname, '../..');
+  const extension = vscode.extensions.getExtension('beyond-the-interpreter-local.rlox');
+  assert.ok(extension, 'the Lox extension must be registered');
+  const installedExtensions = process.env.RLOX_INSTALLED_EXTENSIONS;
+  if (installedExtensions) {
+    assert.equal(path.dirname(extension.extensionPath), installedExtensions);
+    assert.equal(extension.packageJSON.version, '0.1.0');
+    console.log('EDITOR CHECK: installed VSIX provides Lox');
+  } else {
+    assert.equal(extension.extensionPath, root);
+  }
+
+  const fixture = vscode.Uri.file(path.join(root, 'fixtures', 'hello.lox'));
+  const document = await vscode.workspace.openTextDocument(fixture);
+  assert.equal(document.languageId, 'lox');
+
+  const editor = await vscode.window.showTextDocument(document);
+  assert.equal(editor.document.uri.toString(), document.uri.toString());
+  console.log('EDITOR CHECK: hello.lox opened as Lox');
+
+  const settings = vscode.workspace.getConfiguration('editor');
+  await settings.update('autoClosingBrackets', 'always', vscode.ConfigurationTarget.Global);
+  await settings.update('autoClosingQuotes', 'always', vscode.ConfigurationTarget.Global);
+  await settings.update('autoIndent', 'full', vscode.ConfigurationTarget.Global);
+
+  async function openAtEnd(content: string): Promise<vscode.TextEditor> {
+    const document = await vscode.workspace.openTextDocument({ language: 'lox', content });
+    const editor = await vscode.window.showTextDocument(document);
+    editor.options = { insertSpaces: true, tabSize: 2, indentSize: 2 };
+    const end = document.positionAt(content.length);
+    editor.selection = new vscode.Selection(end, end);
+    return editor;
+  }
+
+  const comment = await openAtEnd('print 1;');
+  await vscode.commands.executeCommand('editor.action.commentLine');
+  assert.equal(comment.document.getText(), '// print 1;');
+  await vscode.commands.executeCommand('editor.action.commentLine');
+  assert.equal(comment.document.getText(), 'print 1;');
+  console.log('EDITOR CHECK: line comment toggles and restores source');
+
+  const pair = await openAtEnd('');
+  await vscode.commands.executeCommand('type', { text: '(' });
+  assert.equal(pair.document.getText(), '()');
+  await vscode.commands.executeCommand('type', { text: ')' });
+  assert.equal(pair.document.getText(), '()');
+  console.log('EDITOR CHECK: parenthesis closes and existing close is skipped');
+
+  const quote = await openAtEnd('');
+  await vscode.commands.executeCommand('type', { text: '"' });
+  assert.equal(quote.document.getText(), '""');
+  console.log('EDITOR CHECK: quotes auto-close in empty Lox source');
+
+  const indent = await openAtEnd('if (true) {');
+  await vscode.commands.executeCommand('type', { text: '\n' });
+  assert.equal(indent.document.getText(), 'if (true) {\n  ');
+  console.log('EDITOR CHECK: opening brace increases indentation by two spaces');
+
+  const inComment = await openAtEnd('// ');
+  await vscode.commands.executeCommand('type', { text: '(' });
+  assert.equal(inComment.document.getText(), '// (');
+  console.log('EDITOR CHECK: comment scope suppresses auto-closing');
+
+  const inString = await openAtEnd('"text ');
+  await vscode.commands.executeCommand('type', { text: '(' });
+  assert.equal(inString.document.getText(), '"text (');
+  console.log('EDITOR CHECK: string scope suppresses auto-closing');
+}
+
+```
+
+</details>
+
+<details>
+<summary>Complete resulting ignore rules</summary>
+
+```text title="rlox/editors/vscode/.gitignore · complete resulting file"
+node_modules/
+out/
+.vscode-test/
+*.vsix
+```
+
+</details>

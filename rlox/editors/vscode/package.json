@@ -7,7 +7,7 @@
   "private": true,
   "license": "UNLICENSED",
   "engines": {
-    "vscode": "^1.144.0",
+    "vscode": "^1.128.0",
     "node": ">=22.23.4"
   },
   "categories": [
@@ -17,7 +17,9 @@
     "build": "tsc",
     "check": "tsc --noEmit",
     "test:editor": "npm run build && node out/test/runEditor.js",
-    "test": "npm run build && node --test out/test/grammar.test.js"
+    "test": "npm run build && node --test out/test/grammar.test.js",
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license --out rlox-0.1.0.vsix",
+    "test:installed": "npm run build && node out/test/runEditor.js --installed"
   },
   "contributes": {
     "languages": [
@@ -43,11 +45,23 @@
   },
   "devDependencies": {
     "@types/node": "26.6.6",
-    "@types/vscode": "1.144.0",
+    "@types/vscode": "1.125.0",
     "@vscode/test-electron": "3.1.0",
     "typescript": "6.0.3",
     "vscode-textmate": "9.3.2",
-    "vscode-oniguruma": "2.0.1"
+    "vscode-oniguruma": "2.0.1",
+    "@vscode/vsce": "4.1.0"
   },
-  "type": "commonjs"
+  "type": "commonjs",
+  "files": [
+    "package.json",
+    "README.md",
+    "language-configuration.json",
+    "syntaxes/lox.tmLanguage.json"
+  ],
+  "overrides": {
+    "@vscode/vsce": {
+      "minimatch": "11.0.1"
+    }
+  }
 }

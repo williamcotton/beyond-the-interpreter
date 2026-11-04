@@ -171,3 +171,10 @@ tests and scope-aware editing checks have approved text. Matching grammar,
 all five Node tests and seven actual-host observations pass; the section and
 extension are accepted. Manual color/scope inspection is left
 to the user through the documented development-host launch configuration.
+
+Section 9.4 is drafted at `src/content/docs/chapter-9/9.4-local-vsix.mdx`,
+served at `/chapter-9/9.4-local-vsix/`. Local packaging, archive inspection and
+isolated installed-extension tests have approved text, with a scoped dependency
+patch and archive README casing corrected during implementation. Actual packaging,
+archive inspection and both editor modes pass; the section and extension are
+accepted.

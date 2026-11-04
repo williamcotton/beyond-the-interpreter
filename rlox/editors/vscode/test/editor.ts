@@ -5,8 +5,15 @@ import * as vscode from 'vscode';
 export async function run(): Promise<void> {
   const root = path.resolve(__dirname, '../..');
   const extension = vscode.extensions.getExtension('beyond-the-interpreter-local.rlox');
-  assert.ok(extension, 'the development extension must be registered');
-  assert.equal(extension.extensionPath, root);
+  assert.ok(extension, 'the Lox extension must be registered');
+  const installedExtensions = process.env.RLOX_INSTALLED_EXTENSIONS;
+  if (installedExtensions) {
+    assert.equal(path.dirname(extension.extensionPath), installedExtensions);
+    assert.equal(extension.packageJSON.version, '0.1.0');
+    console.log('EDITOR CHECK: installed VSIX provides Lox');
+  } else {
+    assert.equal(extension.extensionPath, root);
+  }
 
   const fixture = vscode.Uri.file(path.join(root, 'fixtures', 'hello.lox'));
   const document = await vscode.workspace.openTextDocument(fixture);

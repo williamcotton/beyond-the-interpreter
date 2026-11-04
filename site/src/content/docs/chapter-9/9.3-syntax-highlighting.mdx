@@ -5,7 +5,9 @@ description: Contribute a TextMate grammar, test scopes and multiline state, and
 prev:
   link: /chapter-9/9.2-editing-rules/
   label: 9.2 · Make Lox comfortable to edit
-next: false
+next:
+  link: /chapter-9/9.4-local-vsix/
+  label: 9.4 · Install the extension we packaged
 ---
 
 <p className="book-subtitle">Chapter 9 · Giving Lox an Editor</p>
@@ -494,12 +496,12 @@ mkdir -p .vscode
 }
 ```
 
-Open **`rlox/editors/vscode/` as the workspace folder** in VS Code 1.144.0 or
+Open **`rlox/editors/vscode/` as the workspace folder** in VS Code 1.128.0 or
 newer. Choose **Run and Debug → Inspect Lox highlighting**, then start it
 with F5. This launches another development host and opens our fixture. The
 `${workspaceFolder}` paths refer to this extension folder; `${execPath}`
 uses the VS Code build you're running, so use a build compatible with the
-manifest. The downloaded 1.144.1 test application is also a compatible build.
+manifest. The downloaded 1.128.0 test application is also a compatible build.
 
 This manual host uses its own ignored `inspect-user` and `inspect-extensions`
 directories under `.vscode-test/`; they persist between manual sessions,
@@ -531,7 +533,7 @@ will later become our LSP client.
   "private": true,
   "license": "UNLICENSED",
   "engines": {
-    "vscode": "^1.144.0",
+    "vscode": "^1.128.0",
     "node": ">=22.23.4"
   },
   "categories": [
@@ -567,7 +569,7 @@ will later become our LSP client.
   },
   "devDependencies": {
     "@types/node": "26.6.6",
-    "@types/vscode": "1.144.0",
+    "@types/vscode": "1.125.0",
     "@vscode/test-electron": "3.1.0",
     "typescript": "6.0.3",
     "vscode-textmate": "9.3.2",

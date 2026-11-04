@@ -71,7 +71,7 @@ with this complete content:
   "private": true,
   "license": "UNLICENSED",
   "engines": {
-    "vscode": "^1.144.0",
+    "vscode": "^1.128.0",
     "node": ">=22.23.4"
   },
   "categories": [
@@ -98,7 +98,7 @@ with this complete content:
   },
   "devDependencies": {
     "@types/node": "26.6.6",
-    "@types/vscode": "1.144.0",
+    "@types/vscode": "1.125.0",
     "@vscode/test-electron": "3.1.0",
     "typescript": "6.0.3"
   },
@@ -121,8 +121,12 @@ the tests, not to a runtime language engine.
 
 The `devDependencies` supply the TypeScript compiler, Node and VS Code type
 definitions, and the editor test launcher. Exact versions keep this route
-reproducible. `@types/vscode` describes the 1.144 API line; the test host will
-be VS Code **1.144.1**, satisfying our manifest's `^1.144.0` engine range.
+reproducible. `@types/vscode` describes the published 1.125 API line, keeping our test
+code within an API surface older than our **1.128.0** editor minimum. There
+is no 1.128.0 types release. The default test host is VS Code **1.128.0**,
+matching that minimum. The manifest range controls installation compatibility;
+it should describe the APIs we need, rather than the newest editor available.
+See the [extension manifest reference](https://code.visualstudio.com/api/references/extension-manifest).
 TypeScript **6.0.3** supports the Node module settings below; we don't need a
 compiler migration to teach editor registration.
 
@@ -248,7 +252,7 @@ async function main(): Promise<void> {
 
   try {
     await runTests({
-      version: '1.144.1',
+      version: process.env.RLOX_VSCODE_VERSION ?? '1.128.0',
       extensionDevelopmentPath: root,
       extensionTestsPath: path.join(__dirname, 'editor.js'),
       launchArgs: [
