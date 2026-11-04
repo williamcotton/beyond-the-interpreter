@@ -185,3 +185,9 @@ workflow, using rlox/editors/vscode for shell commands and the lockfile cache
 path. Locked installation, TypeScript/grammar checks, packaging and both local
 VS Code modes pass. The combined endpoint is accepted and pushed; hosted Ubuntu/Xvfb verification
 also passes, completing Chapter 9.
+
+Section 10.1 is drafted at `src/content/docs/chapter-10/10.1-recursive-expressions.mdx`,
+served at `/chapter-10/10.1-recursive-expressions/`. Numbers/grouping, the
+recursive-size error and Box recovery are explained through static diagrams
+and a runnable-example route. Matching reader Rust, error/recovery, example output and workspace checks
+pass locally. The section and implementation are accepted.

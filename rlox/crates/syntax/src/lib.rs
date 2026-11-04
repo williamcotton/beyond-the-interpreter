@@ -1,3 +1,5 @@
+pub mod expr;
+
 use logos::Logos;
 
 use rlox_text::{TextRange, TextSize};

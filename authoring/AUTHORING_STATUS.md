@@ -642,3 +642,35 @@ User accepted the combined endpoint with “ok, commit and push and then check t
 ### CH09-05 hosted result
 
 Committed/pushed as `1500db7` (`feat: pair section 9.5 with extension ci checks`). [Project CI](https://github.com/williamcotton/beyond-the-interpreter/actions/runs/41790292594) succeeded for full SHA 1500db7acb3ee3cb1b69569180a1e06206744f47. Workspace checks and Extension checks both succeeded on Ubuntu 24.04. Extension steps verified checkout/Node setup, locked install, TypeScript, grammar, package/archive, xvfb-run/xauth prerequisites, both actual editor modes and post-job cache handling. No workflow/manuscript correction needed. This replaces the earlier unverified-hosted limitation for that revision. Chapter 9 accepted and complete; no Chapter 10 assignment.
+
+## Chapter 10 — Proposed section outline
+
+**Authorization:** User requested outlining Chapter 10 sections after Chapter 9's successful push/CI report. Planning only; no draft/code/commit/push requested.
+
+**Deliverable:** Proposed working frame in PROJECT_OUTLINE.md, preserving the original Chapter 10 synopsis/checkpoint: 10.1 recursive number/grouping shape and Box; 10.2 unary/binary arithmetic nodes and ownership; 10.3 borrowed tree printing. Boundaries remain open to human review and actual writing. Existing syntax crate module is sufficient; no new crate/dependency selected. Arithmetic examples are manually constructed, with parsing deferred to Chapter 11 and later lossless migration explicit.
+
+**Evidence and limits:** Actual syntax scanner and CLI inspected; neither parser nor expression representation exists. Architecture and Chapter 11/12 transition consulted. Original Chapter 10 synopsis unchanged; implementation and site sources unchanged. Rust Book Box reference checked; Crafting Interpreters page fetch failed, so detailed reference verification awaits drafting. Static tree/layout/traversal diagrams proposed, no new visual built. Documentation-only checks; no runtime tests or site build warranted.
+
+**Handoff:** Review the proposed three steps. No 10.1 text or reader implementation yet; await instruction to begin the next text-first loop.
+
+## CH10-01 — Give expressions a recursive shape
+
+**Authorization:** User accepted Chapter 10's working progression and requested starting 10.1. Text only; no reader implementation/commit/push authorized.
+
+**Status and deliverable:** Text approved; matching implementation/ordered route ready for combined review at [10.1 manuscript](../site/src/content/docs/chapter-10/10.1-recursive-expressions.mdx), served at <http://localhost:4321/chapter-10/10.1-recursive-expressions/>. Chapter 10 sidebar, 9.5 next link and orientation records updated. Complete final expression/root views and initial Cargo example supplied; original roadmap synopsis retained.
+
+**Scope:** Number/grouping enum in existing syntax crate; intentional direct-recursion size failure, focused Box recovery, and hand-built example showing number/one-group/two-group Debug views. Explain module wiring, payloads/f64, ownership and diagnostic formatting where used. Two static labeled trees and separate finite-layout sketch show structure and storage; no new interactive/component or screenshot review. No constructor-mirroring unit tests for an enum without behavior; example observation and compile/recovery checks provide proportional checks. No operators/parser/evaluation/full printer/new crate/dependency or extension/CI changes.
+
+**Checks and limits:** Site check zero diagnostics; build succeeds with 32 pages including 404 and existing notices. Local lesson HTTP 200. Focused Box/module edits reconstruct complete source views exactly; Rust listings match stdin-only rustfmt, shell snippets parse. Five official/external reference URLs/anchors and affected rendered local links/anchors resolve. Crafting Interpreters direct HTTP fetch works despite web-tool failure. Accepted 9.5 body unchanged except next navigation. Native/extension/manifests/lockfiles/workflow and site dependencies/components/styles unchanged from 36dd3ae; proposed expr/example reader files absent. git diff --check passes. No future Rust compile/test, implementation, screenshots/visual review, commit/push or 10.2 draft. Actual diagnostic/recovery/example/Cargo route remains unverified until implementation authorization.
+
+**Next permitted action:** Human review of 10.1 and matching code. Await combined acceptance; no 10.2 work, commit or push authorized.
+
+### CH10-01 implementation verification
+
+**Authorization:** User said “ok, looks good, now update rlox”, approving 10.1 text and authorizing following its exact instructions.
+
+**Implementation evidence:** Started from actual accepted Chapter 9. Created the displayed initial expr.rs, added the module declaration before existing imports, then ran cargo check -p rlox-syntax. Observed status 101 and E0072: recursive type Expr has infinite size. Changed only Grouping(Expr) to Grouping(Box<Expr>) and repeated cargo check successfully. Created the example directory/file afterward in the displayed order; cargo run -p rlox-syntax --example expression_shape returned status 0 with stdout exactly matching all three manuscript lines. Formatting, all-target workspace Clippy with warnings denied, and workspace tests pass (46 unchanged tests). All three authored reader files match complete listings exactly; existing scanner/tests preserved byte-for-byte after the module insertion. Static expression diagrams correspond to the actual number/one-group/two-group values. Manifests/lockfile, app/text crates, extension and root workflow unchanged. No manuscript correction needed. Previous site/reference checks remain applicable; no repeated site build, visual review/screenshots, new tests/infrastructure, commit/push or 10.2 work. Native route exercised on local macOS ARM64/Rust 1.95.0 only; no hosted or other-platform result claimed.
+
+**Handoff:** Ready for combined review. Actual reader additions are expr.rs, the single module declaration and examples/expression_shape.rs. No further lesson or commit/push authorized.
+
+**CH10-01 acceptance:** User said “ok great, commit and let’s move on to section 10.2”, accepting the combined 10.1 endpoint and authorizing its commit followed by 10.2 text only. No push.

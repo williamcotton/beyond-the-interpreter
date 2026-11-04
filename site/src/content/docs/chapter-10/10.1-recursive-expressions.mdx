@@ -1,0 +1,1036 @@
+---
+title: 10.1 — Give expressions a recursive shape
+slug: chapter-10/10.1-recursive-expressions
+description: Represent numbers and nested groups with an owned recursive enum, and see why its child needs a Box.
+prev:
+  link: /chapter-9/9.5-editor-ci/
+  label: 9.5 · Run editor checks in CI
+next: false
+---
+
+<p className="book-subtitle">Chapter 10 · Representing Expressions</p>
+
+Our scanner can recognize every token in `(123)`: an opening parenthesis,
+a number, and a closing parenthesis. The result is a flat sequence. What
+would it mean to represent the expression inside those parentheses as one
+thing?
+
+A grouping contains another expression. That inner expression might be a
+number, or it might be another grouping. We need a representation whose
+parts can contain more values of the same type.
+
+Start from [Section 9.5](/chapter-9/9.5-editor-ci/). Return to your **Rust
+workspace directory**, the one containing the workspace `Cargo.toml` and
+`crates/`. If your terminal is still in `editors/vscode/`, run:
+
+```sh
+cd ../..
+```
+
+Paths below begin with `rlox/` to identify files in this book's repository;
+commands run from the Rust workspace itself. We'll add an expression module
+to the existing `rlox-syntax` crate and construct its values by hand.
+
+## See the expression inside the group
+
+Think of a number as a leaf: it has no expression children. A grouping has
+one child. For `(123)`, the tree is:
+
+```text title="Expression tree for (123)"
+Grouping
+  │ contains
+  ▼
+Number: 123
+```
+
+The root is the grouping; its child is the number. Another pair of
+parentheses adds another grouping above it. We can describe `((123))` with
+the same two kinds of node:
+
+```text title="Expression tree for ((123))"
+Grouping
+  │ contains
+  ▼
+Grouping
+  │ contains
+  ▼
+Number: 123
+```
+
+This is the beginning of an **abstract syntax tree**, or AST. It records
+expression structure. We represent a pair of parentheses with a grouping
+node rather than storing two punctuation children. Our scanner and source
+text still retain the original spelling, ranges, whitespace and punctuation;
+this small tree doesn't attempt to preserve all of those details.
+
+[Crafting Interpreters introduces syntax trees](https://craftinginterpreters.com/representing-code.html#implementing-syntax-trees)
+for the same reason: nesting and relationships become explicit. We'll use
+Rust's enums to express the alternatives.
+
+## Try putting an expression inside itself
+
+Our existing `SyntaxKind` enum names token categories. An expression enum
+needs to carry data too. `Number(f64)` means “this expression is a number,
+and here is its value.” `f64` is Rust's 64-bit floating-point type; the
+literal `123.0` has that type in this constructor.
+
+A grouping seems as though it could carry another `Expr` directly. Let's
+try that first and see what Rust needs from us.
+
+**This first definition is an intentional compile failure.** Create
+**`rlox/crates/syntax/src/expr.rs`** with this complete initial content:
+
+```rust title="rlox/crates/syntax/src/expr.rs · intentional recursive-size error"
+#[derive(Debug)]
+pub enum Expr {
+    Number(f64),
+    Grouping(Expr),
+}
+```
+
+`#[derive(Debug)]` asks Rust to generate a diagnostic representation, so we
+can inspect these values later. It doesn't evaluate a Lox expression.
+The `pub` enum will be usable by another crate or by a Cargo example.
+Its variants belong to it: we construct a number as `Expr::Number(123.0)`.
+The Rust Book explains [enum variants with associated data](https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html#enum-values).
+
+Rust also needs to know that this file is part of our library. At the top
+of **`rlox/crates/syntax/src/lib.rs`**, add the module declaration before the
+existing imports:
+
+```diff title="rlox/crates/syntax/src/lib.rs · expose the expression module"
++pub mod expr;
++
+ use logos::Logos;
+```
+
+`mod expr` makes Rust load the sibling `expr.rs` file; `pub` makes the
+module accessible outside the library. Creating the file alone wouldn't
+connect it to the crate. Complete both edits before checking:
+
+```sh
+cargo check -p rlox-syntax
+```
+
+The check should fail with **E0072**, reporting that the recursive type
+`Expr` has infinite size. The compiler may also show related layout errors;
+the recursive child is the problem to fix.
+
+Rust needs a fixed size for an `Expr` value. Its number variant contains an
+`f64`. But how much space should the grouping variant reserve for its
+child? That child is also an `Expr`, so it needs enough space for a grouping
+containing another `Expr`, and so on.
+
+The trees we want are finite. The problem is that the type tries to reserve
+space *inline* for any nesting depth. A number at the end of one particular
+tree can't give every value of the type a fixed layout. See Rust's
+[E0072 explanation](https://doc.rust-lang.org/error_codes/E0072.html).
+
+## Give the child its own allocation
+
+A `Box<Expr>` owns an expression stored in a separate heap allocation. The
+box itself has a known size, so the grouping variant can store it without
+embedding the child's entire layout.
+
+Change just the grouping payload in **`expr.rs`**:
+
+```diff title="rlox/crates/syntax/src/expr.rs · put indirection before the child"
+ #[derive(Debug)]
+ pub enum Expr {
+     Number(f64),
+-    Grouping(Expr),
++    Grouping(Box<Expr>),
+ }
+```
+
+Here is the distinction in layout. The arrows describe containment or
+ownership, not an exact byte layout:
+
+```text title="Direct embedding versus an owned pointer"
+Direct child: layout cannot finish
+  Expr → room for an entire Expr → room for an entire Expr → ...
+
+Boxed child: each node has a finite layout
+  Expr holding Grouping
+    └─ Box pointer ──owns──▶ separate heap allocation: Expr
+                              └─ if Grouping, another Box pointer
+```
+
+A node can still have another grouping as its child. That child lives in
+another allocation instead of needing to fit inside its parent's storage.
+The root value can live wherever its owner stores it; boxing a child doesn't
+mean every value or every field has moved to the heap.
+
+`Box<T>` is supplied by Rust's standard library and available without an
+import. `Box::new(value)` moves a value into a new allocation and returns
+its owning box. Dropping the box drops its child and releases that
+allocation. With nested boxes, ownership continues down the tree. We don't
+need manual deallocation or shared ownership for this structure.
+
+The [Rust Book's recursive types with boxes](https://doc.rust-lang.org/book/ch15-01-box.html#enabling-recursive-types-with-boxes)
+walks through this size problem in more detail.
+
+Run the same check again:
+
+```sh
+cargo check -p rlox-syntax
+```
+
+It should now succeed. We have a recursive type with a finite layout.
+
+## Construct and inspect a small tree
+
+Let's build the trees from our diagrams. Cargo examples give us a small
+executable that can use the library without adding a CLI subcommand.
+Create its directory from the Rust workspace:
+
+```sh
+mkdir -p crates/syntax/examples
+```
+
+Create **`rlox/crates/syntax/examples/expression_shape.rs`** with this
+complete content:
+
+```rust title="rlox/crates/syntax/examples/expression_shape.rs"
+use rlox_syntax::expr::Expr;
+
+fn main() {
+    let number = Expr::Number(123.0);
+    println!("number: {number:?}");
+
+    let grouped = Expr::Grouping(Box::new(number));
+    println!("grouped: {grouped:?}");
+
+    let nested = Expr::Grouping(Box::new(grouped));
+    println!("nested: {nested:?}");
+}
+```
+
+The library's package name is `rlox-syntax`; Rust import paths use the crate
+name `rlox_syntax`. The rest of the path follows our public module and enum.
+
+`Expr::Number(123.0)` is one leaf. `Box::new(number)` moves that leaf into
+an allocation, and `Expr::Grouping(...)` makes a parent that owns the box.
+The `number` binding can't be used after that move. We can move the resulting
+`grouped` value into another box in exactly the same way.
+
+The three `println!` calls happen before each value is moved onward. The
+`:?` format uses the derived `Debug` implementation and borrows the value
+for inspection. It doesn't consume it, so the subsequent move is allowed.
+This is the first time we need ownership to connect syntax nodes; the
+Rust Book's [ownership rules](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html#ownership-rules)
+provide the broader model.
+
+Run the example:
+
+```sh
+cargo run -p rlox-syntax --example expression_shape
+```
+
+After Cargo's build messages, expect:
+
+```text title="Diagnostic views of the three expression values"
+number: Number(123.0)
+grouped: Grouping(Number(123.0))
+nested: Grouping(Grouping(Number(123.0)))
+```
+
+The number is still the innermost leaf. Each construction adds one grouping
+around it, matching the two diagrams. `Box` forwards debug formatting to its
+child, so no `Box(...)` wrapper appears in this output. These are diagnostic
+Rust views; we'll write a deliberate tree printer later in the chapter.
+
+Finish with the workspace checks we've been using:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+The examples compile with `--all-targets`; running the example separately
+checks the displayed observation. The scanner and CLI tests should continue
+to pass. A matching group of output lines tells us we constructed the intended
+shape; it doesn't mean we've parsed any source yet.
+
+We can now represent a number, one grouping, or multiple nested groupings.
+Next we'll give expression nodes operands and operators.
+
+<details>
+<summary>Complete resulting expression module</summary>
+
+```rust title="rlox/crates/syntax/src/expr.rs · complete resulting file"
+#[derive(Debug)]
+pub enum Expr {
+    Number(f64),
+    Grouping(Box<Expr>),
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting syntax library root · existing scanner retained</summary>
+
+```rust title="rlox/crates/syntax/src/lib.rs · complete resulting file"
+pub mod expr;
+
+use logos::Logos;
+
+use rlox_text::{TextRange, TextSize};
+
+#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxKind {
+    #[token("(")]
+    LeftParen,
+    #[token(")")]
+    RightParen,
+    #[token("{")]
+    LeftBrace,
+    #[token("}")]
+    RightBrace,
+    #[token(",")]
+    Comma,
+    #[token(".")]
+    Dot,
+    #[token("-")]
+    Minus,
+    #[token("+")]
+    Plus,
+    #[token(";")]
+    Semicolon,
+    #[token("/")]
+    Slash,
+    #[token("*")]
+    Star,
+    #[token("!")]
+    Bang,
+    #[token("!=")]
+    BangEqual,
+    #[token("=")]
+    Equal,
+    #[token("==")]
+    EqualEqual,
+    #[token(">")]
+    Greater,
+    #[token(">=")]
+    GreaterEqual,
+    #[token("<")]
+    Less,
+    #[token("<=")]
+    LessEqual,
+    #[token("and")]
+    And,
+    #[token("class")]
+    Class,
+    #[token("else")]
+    Else,
+    #[token("false")]
+    False,
+    #[token("for")]
+    For,
+    #[token("fun")]
+    Fun,
+    #[token("if")]
+    If,
+    #[token("nil")]
+    Nil,
+    #[token("or")]
+    Or,
+    #[token("print")]
+    Print,
+    #[token("return")]
+    Return,
+    #[token("super")]
+    Super,
+    #[token("this")]
+    This,
+    #[token("true")]
+    True,
+    #[token("var")]
+    Var,
+    #[token("while")]
+    While,
+    #[regex(r#""[^"]*""#)]
+    String,
+    #[regex(r"[0-9]+(\.[0-9]+)?")]
+    Number,
+    #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
+    Identifier,
+    #[regex(r"[ \t\r\n]+")]
+    Whitespace,
+    #[regex(r"//[^\n]*", allow_greedy = true)]
+    LineComment,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+
+pub fn scan(source: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+
+    for (result, span) in SyntaxKind::lexer(source).spanned() {
+        let kind = match result {
+            Ok(kind) => kind,
+            Err(()) => SyntaxKind::Error,
+        };
+        let range = TextRange::new(TextSize(span.start), TextSize(span.end))
+            .expect("Logos spans are ordered");
+
+        tokens.push(Token { kind, range });
+    }
+
+    tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextRange, TextSize};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()=!");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source);
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(tokens[0].range.slice(source), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(tokens[1].range.slice(source), Some("!"));
+    }
+
+    #[test]
+    fn scans_adjacent_paired_operators() {
+        assert_eq!(
+            scan("!==="),
+            vec![
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::EqualEqual,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_lookahead_preserves_the_next_character() {
+        assert_eq!(
+            scan("!é("),
+            vec![
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn single_operator_can_end_the_source() {
+        for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifiers_stop_before_operators() {
+        assert_eq!(
+            scan("a_2!=other"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(5), TextSize(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn identifiers_can_end_the_source() {
+        for source in ["_", "A9", "printer"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn number_and_name_boundaries_preserve_unknown_characters() {
+        assert_eq!(
+            scan("2aé_b"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Number,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(4), TextSize(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_whitespace_between_tokens() {
+        assert_eq!(
+            scan("a \t\r\n!= b"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: TextRange::new(TextSize(5), TextSize(7)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(7), TextSize(8)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(8), TextSize(9)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn whitespace_uses_the_lox_character_set() {
+        for source in ["\u{000b}", "\u{000c}", "\u{00a0}"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_ranges_cover_the_original_source() {
+        for source in [
+            "",
+            " \t\r\n",
+            "a \t\r\n!= b",
+            "a_2!=other",
+            "2aé_b",
+            "a\u{00a0}b",
+            "/",
+            "/name",
+            "//",
+            "//\n",
+            "//é\r\nname",
+            "///",
+            "a//x\nb",
+            "{},.-+;*",
+            "<=>=<>",
+            "<==>==",
+            "a<=b!=c>=d",
+            "(a+b)*c;",
+            "print printer",
+            "for forest",
+            "class classify",
+            "if(if_1)",
+            "return // print\nprinter",
+            "0 001 123.456",
+            "123. .5 -12 +3.5 1.2.3",
+            "123abc a2",
+            "print 0.5;//é\n123.",
+            r#"print "é";"#,
+            r#""a""b";"#,
+            r#""\"name"#,
+            "\"first\nsecond\" // done\n0.5",
+            "\"",
+            "\"é",
+            "\"first\n// still inside",
+            r#""ok""é"#,
+        ] {
+            let mut offset = 0;
+            let mut reconstructed = String::new();
+
+            for token in scan(source) {
+                let text = token.range.slice(source).expect("valid UTF-8 source slice");
+                assert!(!text.is_empty());
+                let end = offset + text.len();
+                let expected = TextRange::new(TextSize(offset), TextSize(end)).unwrap();
+                assert_eq!(token.range, expected);
+
+                reconstructed.push_str(text);
+                offset = end;
+            }
+
+            assert_eq!(offset, source.len());
+            assert_eq!(reconstructed, source);
+        }
+    }
+
+    #[test]
+    fn recognizes_single_slashes() {
+        assert_eq!(
+            scan("/"),
+            vec![Token {
+                kind: SyntaxKind::Slash,
+                range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+            }]
+        );
+        assert_eq!(
+            scan("/name"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Slash,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_leave_the_line_feed_unread() {
+        assert_eq!(
+            scan("//é\r\nname"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LineComment,
+                    range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(6), TextSize(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_can_end_at_eof() {
+        for source in ["//", "//é", "///"] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::LineComment,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_characters_remain_separate_tokens() {
+        assert_eq!(
+            scan("@é💥"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_remaining_single_character_punctuation() {
+        for (source, kind) in [
+            ("{", SyntaxKind::LeftBrace),
+            ("}", SyntaxKind::RightBrace),
+            (",", SyntaxKind::Comma),
+            (".", SyntaxKind::Dot),
+            ("-", SyntaxKind::Minus),
+            ("+", SyntaxKind::Plus),
+            (";", SyntaxKind::Semicolon),
+            ("*", SyntaxKind::Star),
+            ("<", SyntaxKind::Less),
+            (">", SyntaxKind::Greater),
+        ] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn recognizes_adjacent_comparison_operators() {
+        assert_eq!(
+            scan("<=>=<>"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Less,
+                    range: TextRange::new(TextSize(4), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Greater,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn comparison_pairs_leave_extra_equals_tokens() {
+        assert_eq!(
+            scan("<==>=="),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_reserved_words() {
+        for (source, kind) in [
+            ("and", SyntaxKind::And),
+            ("class", SyntaxKind::Class),
+            ("else", SyntaxKind::Else),
+            ("false", SyntaxKind::False),
+            ("for", SyntaxKind::For),
+            ("fun", SyntaxKind::Fun),
+            ("if", SyntaxKind::If),
+            ("nil", SyntaxKind::Nil),
+            ("or", SyntaxKind::Or),
+            ("print", SyntaxKind::Print),
+            ("return", SyntaxKind::Return),
+            ("super", SyntaxKind::Super),
+            ("this", SyntaxKind::This),
+            ("true", SyntaxKind::True),
+            ("var", SyntaxKind::Var),
+            ("while", SyntaxKind::While),
+        ] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn keywords_do_not_split_longer_identifiers() {
+        for source in [
+            "forest",
+            "printer",
+            "classify",
+            "true_value",
+            "_if",
+            "Print",
+        ] {
+            assert_eq!(
+                scan(source),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_spelling_comes_from_the_source() {
+        let source = "print printer";
+        let tokens = scan(source);
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::Print,
+                    range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(6), TextSize(13)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(tokens[0].range.slice(source), Some("print"));
+        assert_eq!(tokens[1].range.slice(source), Some(" "));
+        assert_eq!(tokens[2].range.slice(source), Some("printer"));
+    }
+
+    #[test]
+    fn recognizes_number_spellings() {
+        for source in ["0", "123", "001", "0.5", "123.456", "00.50"] {
+            let tokens = scan(source);
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Number,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+            assert_eq!(tokens[0].range.slice(source), Some(source));
+        }
+    }
+
+    #[test]
+    fn numbers_leave_dots_signs_and_names_separate() {
+        for (source, expected) in [
+            (
+                "123.",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Dot, 3, 4)],
+            ),
+            (
+                ".5",
+                vec![(SyntaxKind::Dot, 0, 1), (SyntaxKind::Number, 1, 2)],
+            ),
+            (
+                "-12",
+                vec![(SyntaxKind::Minus, 0, 1), (SyntaxKind::Number, 1, 3)],
+            ),
+            (
+                "+3.5",
+                vec![(SyntaxKind::Plus, 0, 1), (SyntaxKind::Number, 1, 4)],
+            ),
+            (
+                "1.2.3",
+                vec![
+                    (SyntaxKind::Number, 0, 3),
+                    (SyntaxKind::Dot, 3, 4),
+                    (SyntaxKind::Number, 4, 5),
+                ],
+            ),
+            (
+                "123abc",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Identifier, 3, 6)],
+            ),
+            ("a2", vec![(SyntaxKind::Identifier, 0, 2)]),
+        ] {
+            let tokens = scan(source);
+            assert_eq!(tokens.len(), expected.len(), "{source}");
+            for (token, (kind, start, end)) in tokens.iter().zip(expected) {
+                assert_eq!(token.kind, kind, "{source}");
+                assert_eq!(
+                    token.range,
+                    TextRange::new(TextSize(start), TextSize(end)).unwrap(),
+                    "{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn keeps_complete_string_spellings() {
+        for source in [
+            r#""""#,
+            r#""hello""#,
+            r#""// 123 ; print""#,
+            "\"é💥\"",
+            "\"first\nsecond\"",
+            r#""\n""#,
+        ] {
+            let tokens = scan(source);
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+            assert_eq!(tokens[0].range.slice(source), Some(source));
+        }
+    }
+
+    #[test]
+    fn strings_stop_at_the_next_quote() {
+        let source = r#""a""b";"#;
+        let tokens = scan(source);
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(3), TextSize(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Semicolon,
+                    range: TextRange::new(TextSize(6), TextSize(7)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(tokens[0].range.slice(source), Some(r#""a""#));
+        assert_eq!(tokens[1].range.slice(source), Some(r#""b""#));
+    }
+
+    #[test]
+    fn backslash_does_not_escape_a_quote() {
+        let source = r#""\"name"#;
+        assert_eq!(
+            scan(source),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn unterminated_strings_cover_the_remaining_source() {
+        for source in ["\"", "\"é", "\"first\n// still inside"] {
+            let tokens = scan(source);
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                }]
+            );
+            assert_eq!(tokens[0].range.slice(source), Some(source));
+        }
+
+        assert_eq!(
+            scan(r#""ok""é"#),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: TextRange::new(TextSize(0), TextSize(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: TextRange::new(TextSize(4), TextSize(7)).unwrap(),
+                },
+            ]
+        );
+    }
+}
+```
+
+</details>

@@ -83,6 +83,12 @@ export default defineConfig({
             { label: '9.5 · Run editor checks in CI', link: '/chapter-9/9.5-editor-ci/' },
           ],
         },
+        {
+          label: 'Chapter 10 · Representing Expressions',
+          items: [
+            { label: '10.1 · Give expressions a recursive shape', link: '/chapter-10/10.1-recursive-expressions/' },
+          ],
+        },
       ],
       customCss: ['./src/styles/book.css'],
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },
