@@ -20,6 +20,13 @@ fn main() {
         "-",
         "(-)",
         "-é",
+        "8 / 4 / 2",
+        "8 * 4 / 2",
+        "8 / (4 / 2)",
+        "-8 * 4 / 2",
+        "8 *",
+        "8 **2",
+        "8 / é",
     ] {
         match parse(source) {
             Ok(expr) => println!("{source:?} => {}", expr.to_prefix()),

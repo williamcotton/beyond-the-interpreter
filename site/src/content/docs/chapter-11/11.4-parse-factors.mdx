@@ -1,0 +1,865 @@
+---
+title: 11.4 — Chain multiplication and division
+slug: chapter-11/11.4-parse-factors
+description: Fold multiplicative operators into a left-associated tree and bound its constructed height.
+prev:
+  link: /chapter-11/11.3-parse-unary/
+  label: 11.3 · Parse unary negation
+next: false
+---
+
+<p className="book-subtitle">Chapter 11 · Parsing Expressions by Hand</p>
+
+The parser can read an operand such as `8`, `-8` or `(8)`. For `8 / 4 / 2`,
+it stops after the first number. We need to connect operands without losing
+their order.
+
+Multiplication and division share one precedence level. Repeated operators
+at that level associate to the left, so the tree we want is:
+
+```text title="Left-associated division"
+8 / 4 / 2 → (/ (/ 8 4) 2)
+```
+
+The second division contains the first on its left. Our parser can build
+that shape by keeping the tree built so far and making it the left child
+of each new binary node.
+
+Start from [Section 11.3](/chapter-11/11.3-parse-unary/), in the **Rust
+workspace directory**. We'll add a `factor` rule in `parser.rs` and reuse
+the binary expression types and printer from Chapter 10.
+
+## Fold another operand into the left tree
+
+Our grammar gains one level above unary:
+
+```text title="The multiplicative grammar level"
+expression → factor
+factor     → unary ( ("*" | "/") unary )*
+```
+
+The final unquoted `*` means “repeat zero or more times.” Each repetition
+contains an operator and another unary operand. The quoted `"*"` is an
+actual multiplication token. This is the
+[multiplicative rule in Crafting Interpreters](https://craftinginterpreters.com/parsing-expressions.html#recursive-descent-parsing).
+
+For `8 / 4 / 2`, the loop's fixed steps are:
+
+```text title="A growing left tree"
+read 8       → 8
+read / and 4 → (/ 8 4)
+read / and 2 → (/ (/ 8 4) 2)
+```
+
+Each right operand is read through `unary`, not another whole `factor`.
+Reading a complete factor on the right would allow it to absorb `4 / 2`
+and produce the different, right-associated tree `(/ 8 (/ 4 2))`.
+
+## Count the tree a loop can build
+
+A loop keeps the parser's call stack shallow for a long chain. The returned
+tree still gets taller with every fold. That matters to our recursive
+printer and the tree's eventual destruction too, so the existing budget
+must cover binary nodes as well as grouping and negation.
+
+Keep `MAX_NESTING` at 64. Its meaning becomes the maximum number of
+**non-leaf expression nodes along any path to a number**. A number has
+height zero. A grouping or unary node adds one to its child's height. A
+binary node adds one to the larger of its two child heights.
+
+In **`rlox/crates/syntax/src/parser.rs`**, extend the expression import:
+
+```diff title="rlox/crates/syntax/src/parser.rs · import binary operators"
+-use crate::expr::{Expr, UnaryOp};
++use crate::expr::{BinaryOp, Expr, UnaryOp};
+```
+
+Insert this helper **after `error_at` and before public `parse`**, separated
+from each by a blank line:
+
+```rust title="rlox/crates/syntax/src/parser.rs · insert the private tree-height helper"
+fn tree_height(expr: &Expr) -> usize {
+    match expr {
+        Expr::Number(_) => 0,
+        Expr::Grouping(child) => 1 + tree_height(child),
+        Expr::Unary { right, .. } => 1 + tree_height(right),
+        Expr::Binary { left, right, .. } => 1 + tree_height(left).max(tree_height(right)),
+    }
+}
+```
+
+This is another borrowed tree traversal, like our prefix printer, returning
+a count instead of a string. The `..` patterns ignore fields such as the
+operator, which doesn't affect height. The
+[`max` operation](https://doc.rust-lang.org/std/cmp/trait.Ord.html#method.max)
+selects the deeper child; adding both heights would count branches that
+aren't on the same path.
+
+We'll keep the growing left tree's height beside it in the loop. That
+avoids walking the entire left prefix again for each additional operator.
+The right operand's height comes from this helper after it has been parsed.
+The helper stays private to this small owned-tree parser; no expression
+API or metadata field is needed.
+
+## Consume an operator before reading its right operand
+
+Inside the `Parser` impl, **after `expression` and before `unary`**, insert
+this complete method:
+
+```rust title="rlox/crates/syntax/src/parser.rs · insert the factor loop"
+    fn factor(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        let mut expr = self.unary(nesting)?;
+        let mut height = tree_height(&expr);
+
+        while let Some(token) = self.peek() {
+            let op = match token.kind {
+                SyntaxKind::Star => BinaryOp::Multiply,
+                SyntaxKind::Slash => BinaryOp::Divide,
+                _ => break,
+            };
+            self.bump();
+            let right = self.unary(nesting)?;
+            let next_height = 1 + height.max(tree_height(&right));
+            if nesting + next_height > MAX_NESTING {
+                return Err(error_at(token, "expression nesting limit exceeded"));
+            }
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op,
+                right: Box::new(right),
+            };
+            height = next_height;
+        }
+
+        Ok(expr)
+    }
+```
+
+The first unary expression is already a valid factor. The binding is `mut`
+because each successful iteration replaces it with a larger tree.
+`while let Some(token) = self.peek()` repeats while a token is available;
+inside the loop, a different kind triggers `break`. Rust permits patterns
+in [conditional loops](https://doc.rust-lang.org/book/ch19-01-all-the-places-for-patterns.html)
+as well as in `match`.
+
+When the token is `Star` or `Slash`, we choose its binary operator and
+advance past it. The next unary call reads the right operand. Every
+iteration either consumes that operator and an operand, returns an error,
+or breaks without consuming the token. A closing parenthesis therefore
+remains for its grouping caller.
+
+Before moving either child into the new parent, calculate the proposed
+height. `nesting` counts the enclosing grouping and negation calls;
+`next_height` counts this new subtree. Their sum must fit the same budget.
+This checks both sides, including a deeply nested right operand.
+
+We retain the operator's copied `Token` while reading the right side. If
+constructing the parent would exceed the budget, `error_at(token, ...)`
+points back to that operator. Using the cursor's current error position
+would instead point after the right operand. Missing or invalid right
+operands return their own errors before this construction check.
+
+`Box::new(expr)` moves the old tree into the left child; assigning the
+new binary expression back to `expr` gives the next iteration its root.
+We update the recorded height at the same time. This is a **left fold**,
+not a recursive call for the rest of the operator chain.
+
+Change the body of `expression` to enter this new rule:
+
+```diff title="rlox/crates/syntax/src/parser.rs · enter factor before unary"
+     fn expression(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+-        self.unary(nesting)
++        self.factor(nesting)
+     }
+```
+
+Complete the import, helper, method and delegation edits before checking:
+
+```sh
+cargo check -p rlox-syntax
+cargo test -p rlox-syntax parser::tests
+```
+
+The fourteen existing parser tests should still pass. Their expressions
+reach the old unary/primary rules through the first call in `factor`.
+The public full-input check and all cursor helpers are unchanged.
+
+## Compare folding with explicit grouping
+
+For `8 / 4 / 2`, the operator tokens are at `[2, 3)` and `[6, 7)`:
+
+```text title="Operator consumption in the left fold"
+[0..1) 8   [2..3) /   [4..5) 4   [6..7) /   [8..9) 2
+
+first /  → left: 8          right: 4 → (/ 8 4)
+second / → left: (/ 8 4)   right: 2 → (/ (/ 8 4) 2)
+```
+
+Parentheses can request a different shape. In `8 / (4 / 2)`, the right
+unary operand is a grouping whose child expression parses its own factor.
+The result is `(/ 8 (group (/ 4 2)))`.
+
+In **`rlox/crates/syntax/examples/parse_expression.rs`**, append these entries
+inside the source array, **after `"-é",` and before `] {`**. Keep the old
+entries and display loop:
+
+```rust title="rlox/crates/syntax/examples/parse_expression.rs · append multiplicative inputs"
+        "8 / 4 / 2",
+        "8 * 4 / 2",
+        "8 / (4 / 2)",
+        "-8 * 4 / 2",
+        "8 *",
+        "8 **2",
+        "8 / é",
+```
+
+Run the example:
+
+```sh
+cargo run -p rlox-syntax --example parse_expression
+```
+
+Its earlier eighteen lines should remain unchanged. Then expect:
+
+```text title="Additional multiplication and division observations"
+"8 / 4 / 2" => (/ (/ 8 4) 2)
+"8 * 4 / 2" => (/ (* 8 4) 2)
+"8 / (4 / 2)" => (/ 8 (group (/ 4 2)))
+"-8 * 4 / 2" => (/ (* (- 8) 4) 2)
+"8 *" => expected an expression [3..3)
+"8 **2" => expected an expression [3..4)
+"8 / é" => invalid token [4..6)
+```
+
+The second `*` in `8 **2` is a valid scanner token, but it can't begin a
+unary operand. The `é` is a lexical error, and its original two-byte range
+is preserved. Both failures are reported where the right operand is
+needed, rather than as trailing-input errors.
+
+## Check the fold and the height it produces
+
+Inside `parser.rs`'s existing `tests` module, **after the current tests and
+before the module's final brace**, leave a blank line and append:
+
+```rust title="rlox/crates/syntax/src/parser.rs · append multiplicative behavior tests"
+    #[test]
+    fn parses_multiplicative_chains_and_unary_operands() {
+        for (source, expected) in [
+            ("8 / 4 / 2", "(/ (/ 8 4) 2)"),
+            ("8 * 4 / 2", "(/ (* 8 4) 2)"),
+            ("8 / (4 / 2)", "(/ 8 (group (/ 4 2)))"),
+            ("-8 * 4 / 2", "(/ (* (- 8) 4) 2)"),
+            ("8 * // é\n2", "(* 8 2)"),
+            ("8 / 0", "(/ 8 0)"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn reports_multiplicative_operand_errors() {
+        for (source, message, start, end) in [
+            ("8 *", "expected an expression", 3, 3),
+            ("8 **2", "expected an expression", 3, 4),
+            ("8 / é", "invalid token", 4, 6),
+            ("(8 /)", "expected an expression", 4, 5),
+            ("8 / 2 3", "expected end of input", 6, 7),
+        ] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+```
+
+These expected strings make associativity, operand order, grouping and
+unary binding observable. `8 / 0` also produces a tree: parsing describes
+an operation without executing it.
+
+Then append these tests **inside the same module**, separated from the
+previous tests by a blank line:
+
+```rust title="rlox/crates/syntax/src/parser.rs · append binary-height boundary tests"
+    #[test]
+    fn bounds_the_height_of_a_left_fold() {
+        let at_limit = format!("1{}", " * 1".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured binary height is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}1{}",
+                "(* ".repeat(MAX_NESTING),
+                " 1)".repeat(MAX_NESTING)
+            )
+        );
+
+        let error = parse(&format!("{at_limit} * 1")).unwrap_err();
+        let operator = 2 + 4 * MAX_NESTING;
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, operator);
+        assert_eq!(error.range.end().0, operator + 1);
+    }
+
+    #[test]
+    fn includes_both_operand_heights() {
+        let signs = "-".repeat(MAX_NESTING - 1);
+        for source in [format!("{signs}1 * 1"), format!("1 * {signs}1")] {
+            assert!(parse(&source).is_ok(), "{source}");
+        }
+
+        let signs = "-".repeat(MAX_NESTING);
+        for (source, operator) in [
+            (format!("{signs}1 * 1"), MAX_NESTING + 2),
+            (format!("1 * {signs}1"), 2),
+        ] {
+            let error = parse(&source).unwrap_err();
+            assert_eq!(error.message, "expression nesting limit exceeded");
+            assert_eq!(error.range.start().0, operator);
+            assert_eq!(error.range.end().0, operator + 1);
+        }
+    }
+
+    #[test]
+    fn includes_enclosing_grouping_in_the_binary_budget() {
+        let at_limit = format!("(1{})", " * 1".repeat(MAX_NESTING - 1));
+        assert!(parse(&at_limit).is_ok());
+
+        let too_deep = format!("(1{})", " * 1".repeat(MAX_NESTING));
+        let error = parse(&too_deep).unwrap_err();
+        let operator = 3 + 4 * (MAX_NESTING - 1);
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, operator);
+        assert_eq!(error.range.end().0, operator + 1);
+    }
+```
+
+A chain of 64 multiplications has height 64 even though the parser reads
+it in a loop. Its 65th operator is at `[258, 259)` in the constructed
+source. The operand tests account for tall unary trees on either side;
+the grouping test reserves one level for the enclosing group. These cases
+check the combined tree budget, not just the number of active parser calls.
+
+Run the parser tests, then the workspace checks:
+
+```sh
+cargo test -p rlox-syntax parser::tests
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+All nineteen parser tests and the existing workspace tests should pass.
+We can now parse a full multiplicative chain, preserving its left-associated
+shape and explicit grouping. Next we'll add addition and subtraction around
+this precedence level.
+
+<details>
+<summary>Complete resulting parser module</summary>
+
+```rust title="rlox/crates/syntax/src/parser.rs · complete resulting file"
+use rlox_text::{TextRange, TextSize};
+
+use crate::expr::{BinaryOp, Expr, UnaryOp};
+use crate::{SyntaxKind, Token, scan};
+
+const MAX_NESTING: usize = 64;
+
+#[derive(Debug)]
+pub struct ParseError {
+    pub message: String,
+    pub range: TextRange,
+}
+
+fn error_at(token: Token, message: &str) -> ParseError {
+    let message = if token.kind == SyntaxKind::Error {
+        "invalid token"
+    } else {
+        message
+    };
+    ParseError {
+        message: message.to_owned(),
+        range: token.range,
+    }
+}
+
+fn tree_height(expr: &Expr) -> usize {
+    match expr {
+        Expr::Number(_) => 0,
+        Expr::Grouping(child) => 1 + tree_height(child),
+        Expr::Unary { right, .. } => 1 + tree_height(right),
+        Expr::Binary { left, right, .. } => 1 + tree_height(left).max(tree_height(right)),
+    }
+}
+
+pub fn parse(source: &str) -> Result<Expr, ParseError> {
+    let mut parser = Parser::new(source);
+    let expr = parser.expression(0)?;
+    if parser.peek().is_some() {
+        return Err(parser.error("expected end of input"));
+    }
+    Ok(expr)
+}
+
+struct Parser<'src> {
+    source: &'src str,
+    tokens: Vec<Token>,
+    current: usize,
+}
+
+impl<'src> Parser<'src> {
+    fn new(source: &'src str) -> Self {
+        let mut tokens = scan(source);
+        tokens.retain(|token| {
+            !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::LineComment)
+        });
+        Self {
+            source,
+            tokens,
+            current: 0,
+        }
+    }
+
+    fn expression(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        self.factor(nesting)
+    }
+
+    fn factor(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        let mut expr = self.unary(nesting)?;
+        let mut height = tree_height(&expr);
+
+        while let Some(token) = self.peek() {
+            let op = match token.kind {
+                SyntaxKind::Star => BinaryOp::Multiply,
+                SyntaxKind::Slash => BinaryOp::Divide,
+                _ => break,
+            };
+            self.bump();
+            let right = self.unary(nesting)?;
+            let next_height = 1 + height.max(tree_height(&right));
+            if nesting + next_height > MAX_NESTING {
+                return Err(error_at(token, "expression nesting limit exceeded"));
+            }
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op,
+                right: Box::new(right),
+            };
+            height = next_height;
+        }
+
+        Ok(expr)
+    }
+
+    fn unary(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        match self.peek() {
+            Some(token) if token.kind == SyntaxKind::Minus => {
+                if nesting >= MAX_NESTING {
+                    return Err(self.error("expression nesting limit exceeded"));
+                }
+                self.bump();
+                let right = self.unary(nesting + 1)?;
+                Ok(Expr::Unary {
+                    op: UnaryOp::Negate,
+                    right: Box::new(right),
+                })
+            }
+            _ => self.primary(nesting),
+        }
+    }
+
+    fn primary(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        let token = match self.peek() {
+            Some(token) => token,
+            None => return Err(self.error("expected an expression")),
+        };
+        match token.kind {
+            SyntaxKind::Number => self.number(),
+            SyntaxKind::LeftParen => {
+                if nesting >= MAX_NESTING {
+                    return Err(self.error("expression nesting limit exceeded"));
+                }
+                self.bump();
+                let inner = self.expression(nesting + 1)?;
+                match self.peek() {
+                    Some(close) if close.kind == SyntaxKind::RightParen => self.bump(),
+                    _ => return Err(self.error("expected ')'")),
+                }
+                Ok(Expr::Grouping(Box::new(inner)))
+            }
+            _ => Err(self.error("expected an expression")),
+        }
+    }
+
+    fn number(&mut self) -> Result<Expr, ParseError> {
+        let token = match self.peek() {
+            Some(token) => token,
+            None => return Err(self.error("expected a number")),
+        };
+        if token.kind != SyntaxKind::Number {
+            return Err(self.error("expected a number"));
+        }
+
+        let spelling = token
+            .range
+            .slice(self.source)
+            .expect("scanner ranges are valid");
+        let value = spelling
+            .parse::<f64>()
+            .map_err(|_| error_at(token, "invalid number"))?;
+        self.bump();
+        Ok(Expr::Number(value))
+    }
+
+    fn peek(&self) -> Option<Token> {
+        self.tokens.get(self.current).copied()
+    }
+
+    fn bump(&mut self) {
+        self.current += 1;
+    }
+
+    fn error(&self, message: &str) -> ParseError {
+        match self.peek() {
+            Some(token) => error_at(token, message),
+            None => {
+                let end = TextSize(self.source.len());
+                ParseError {
+                    message: message.to_owned(),
+                    range: TextRange::new(end, end).expect("ordered EOF range"),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_NESTING, parse};
+
+    #[test]
+    fn parses_number_spellings_and_surrounding_trivia() {
+        for (source, expected) in [
+            ("0", "0"),
+            ("001.50", "1.5"),
+            (" \t123 // note\n", "123"),
+            (" // é\n12.5 // end", "12.5"),
+        ] {
+            let expr = parse(source).expect("one number");
+            assert_eq!(expr.to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn missing_expression_points_to_source_end() {
+        for source in ["", " \t\n", " // é\n"] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, "expected an expression");
+            assert_eq!(error.range.start().0, source.len());
+            assert_eq!(error.range.end().0, source.len());
+        }
+    }
+
+    #[test]
+    fn rejects_a_second_number() {
+        let error = parse("123 456").unwrap_err();
+        assert_eq!(error.message, "expected end of input");
+        assert_eq!(error.range.start().0, 4);
+        assert_eq!(error.range.end().0, 7);
+    }
+
+    #[test]
+    fn rejects_an_unexpected_token_kind() {
+        let error = parse("hello").unwrap_err();
+        assert_eq!(error.message, "expected an expression");
+        assert_eq!(error.range.start().0, 0);
+        assert_eq!(error.range.end().0, 5);
+    }
+
+    #[test]
+    fn retains_lexical_errors_and_utf8_ranges() {
+        for (source, start, end) in [("é", 0, 2), ("123 é", 4, 6)] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, "invalid token");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+
+    #[test]
+    fn parses_nested_groups_and_trivia() {
+        for (source, expected) in [
+            ("(123)", "(group 123)"),
+            ("((12.5))", "(group (group 12.5))"),
+            ("( // é\n123 )", "(group 123)"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected);
+        }
+    }
+
+    #[test]
+    fn reports_missing_closing_parentheses() {
+        for (source, start, end) in [("(123", 4, 4), ("(123 456)", 5, 8), ("(123 // é\n", 11, 11)]
+        {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, "expected ')'");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+
+    #[test]
+    fn rejects_empty_groups_and_trailing_closes() {
+        let empty = parse("()").unwrap_err();
+        assert_eq!(empty.message, "expected an expression");
+        assert_eq!(empty.range.start().0, 1);
+        assert_eq!(empty.range.end().0, 2);
+
+        let extra = parse("123)").unwrap_err();
+        assert_eq!(extra.message, "expected end of input");
+        assert_eq!(extra.range.start().0, 3);
+        assert_eq!(extra.range.end().0, 4);
+    }
+
+    #[test]
+    fn retains_lexical_errors_inside_groups() {
+        for (source, start, end) in [("(é)", 1, 3), ("(123 é)", 5, 7)] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, "invalid token");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+
+    #[test]
+    fn checks_both_sides_of_the_nesting_limit() {
+        let at_limit = format!("{}1{}", "(".repeat(MAX_NESTING), ")".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}1{}",
+                "(group ".repeat(MAX_NESTING),
+                ")".repeat(MAX_NESTING)
+            )
+        );
+
+        let too_deep = format!("({at_limit})");
+        let error = parse(&too_deep).unwrap_err();
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, MAX_NESTING);
+        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+    }
+
+    #[test]
+    fn parses_unary_chains_grouping_and_trivia() {
+        for (source, expected) in [
+            ("-123", "(- 123)"),
+            ("--123", "(- (- 123))"),
+            ("-(123)", "(- (group 123))"),
+            ("(-123)", "(group (- 123))"),
+            (" - // é\n-12.5 ", "(- (- 12.5))"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn reports_unary_operand_and_delimiter_errors() {
+        for (source, message, start, end) in [
+            ("-", "expected an expression", 1, 1),
+            ("--", "expected an expression", 2, 2),
+            ("(-)", "expected an expression", 2, 3),
+            ("-é", "invalid token", 1, 3),
+            ("-123)", "expected end of input", 4, 5),
+            ("(-123", "expected ')'", 5, 5),
+        ] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+
+    #[test]
+    fn bounds_unary_nesting() {
+        let at_limit = format!("{}1", "-".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured unary depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!("{}1{}", "(- ".repeat(MAX_NESTING), ")".repeat(MAX_NESTING))
+        );
+
+        let error = parse(&format!("-{at_limit}")).unwrap_err();
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, MAX_NESTING);
+        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+    }
+
+    #[test]
+    fn shares_the_budget_between_groups_and_negation() {
+        let groups = MAX_NESTING / 2;
+        let signs = MAX_NESTING - groups;
+        let at_limit = format!(
+            "{}{}1{}",
+            "(".repeat(groups),
+            "-".repeat(signs),
+            ")".repeat(groups)
+        );
+        let expr = parse(&at_limit).expect("the combined depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}{}1{}",
+                "(group ".repeat(groups),
+                "(- ".repeat(signs),
+                ")".repeat(MAX_NESTING)
+            )
+        );
+
+        let too_deep = format!(
+            "{}{}1{}",
+            "(".repeat(groups),
+            "-".repeat(signs + 1),
+            ")".repeat(groups)
+        );
+        let error = parse(&too_deep).unwrap_err();
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, MAX_NESTING);
+        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+    }
+
+    #[test]
+    fn parses_multiplicative_chains_and_unary_operands() {
+        for (source, expected) in [
+            ("8 / 4 / 2", "(/ (/ 8 4) 2)"),
+            ("8 * 4 / 2", "(/ (* 8 4) 2)"),
+            ("8 / (4 / 2)", "(/ 8 (group (/ 4 2)))"),
+            ("-8 * 4 / 2", "(/ (* (- 8) 4) 2)"),
+            ("8 * // é\n2", "(* 8 2)"),
+            ("8 / 0", "(/ 8 0)"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn reports_multiplicative_operand_errors() {
+        for (source, message, start, end) in [
+            ("8 *", "expected an expression", 3, 3),
+            ("8 **2", "expected an expression", 3, 4),
+            ("8 / é", "invalid token", 4, 6),
+            ("(8 /)", "expected an expression", 4, 5),
+            ("8 / 2 3", "expected end of input", 6, 7),
+        ] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+
+    #[test]
+    fn bounds_the_height_of_a_left_fold() {
+        let at_limit = format!("1{}", " * 1".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured binary height is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}1{}",
+                "(* ".repeat(MAX_NESTING),
+                " 1)".repeat(MAX_NESTING)
+            )
+        );
+
+        let error = parse(&format!("{at_limit} * 1")).unwrap_err();
+        let operator = 2 + 4 * MAX_NESTING;
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, operator);
+        assert_eq!(error.range.end().0, operator + 1);
+    }
+
+    #[test]
+    fn includes_both_operand_heights() {
+        let signs = "-".repeat(MAX_NESTING - 1);
+        for source in [format!("{signs}1 * 1"), format!("1 * {signs}1")] {
+            assert!(parse(&source).is_ok(), "{source}");
+        }
+
+        let signs = "-".repeat(MAX_NESTING);
+        for (source, operator) in [
+            (format!("{signs}1 * 1"), MAX_NESTING + 2),
+            (format!("1 * {signs}1"), 2),
+        ] {
+            let error = parse(&source).unwrap_err();
+            assert_eq!(error.message, "expression nesting limit exceeded");
+            assert_eq!(error.range.start().0, operator);
+            assert_eq!(error.range.end().0, operator + 1);
+        }
+    }
+
+    #[test]
+    fn includes_enclosing_grouping_in_the_binary_budget() {
+        let at_limit = format!("(1{})", " * 1".repeat(MAX_NESTING - 1));
+        assert!(parse(&at_limit).is_ok());
+
+        let too_deep = format!("(1{})", " * 1".repeat(MAX_NESTING));
+        let error = parse(&too_deep).unwrap_err();
+        let operator = 3 + 4 * (MAX_NESTING - 1);
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, operator);
+        assert_eq!(error.range.end().0, operator + 1);
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting parsed-expression example</summary>
+
+```rust title="rlox/crates/syntax/examples/parse_expression.rs · complete resulting file"
+use rlox_syntax::parser::parse;
+
+fn main() {
+    for source in [
+        " 123 // note\n",
+        "123 456",
+        "",
+        "é",
+        "(123)",
+        "((12.5))",
+        "( // é\n123 )",
+        "()",
+        "(123",
+        "(123 456)",
+        "123)",
+        "-123",
+        "--123",
+        "-(123)",
+        "(-123)",
+        "-",
+        "(-)",
+        "-é",
+        "8 / 4 / 2",
+        "8 * 4 / 2",
+        "8 / (4 / 2)",
+        "-8 * 4 / 2",
+        "8 *",
+        "8 **2",
+        "8 / é",
+    ] {
+        match parse(source) {
+            Ok(expr) => println!("{source:?} => {}", expr.to_prefix()),
+            Err(error) => println!(
+                "{source:?} => {} [{}..{})",
+                error.message,
+                error.range.start().0,
+                error.range.end().0,
+            ),
+        }
+    }
+}
+```
+
+</details>

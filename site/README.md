@@ -217,3 +217,8 @@ Section 11.3 is drafted at `src/content/docs/chapter-11/11.3-parse-unary.mdx`,
 served at `/chapter-11/11.3-parse-unary/`. Its unary rule, grouped operands and shared nesting budget match the
 implementation and are accepted. Example output, formatting, Clippy and all
 64 workspace tests pass locally.
+
+Section 11.4 is drafted at `src/content/docs/chapter-11/11.4-parse-factors.mdx`,
+served at `/chapter-11/11.4-parse-factors/`. Its multiplicative loop and binary-tree height checks match the implementation
+and are accepted. Example output, formatting, Clippy and all 69 workspace
+tests pass locally.

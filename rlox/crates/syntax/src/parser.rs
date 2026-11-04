@@ -1,6 +1,6 @@
 use rlox_text::{TextRange, TextSize};
 
-use crate::expr::{Expr, UnaryOp};
+use crate::expr::{BinaryOp, Expr, UnaryOp};
 use crate::{SyntaxKind, Token, scan};
 
 const MAX_NESTING: usize = 64;
@@ -20,6 +20,15 @@ fn error_at(token: Token, message: &str) -> ParseError {
     ParseError {
         message: message.to_owned(),
         range: token.range,
+    }
+}
+
+fn tree_height(expr: &Expr) -> usize {
+    match expr {
+        Expr::Number(_) => 0,
+        Expr::Grouping(child) => 1 + tree_height(child),
+        Expr::Unary { right, .. } => 1 + tree_height(right),
+        Expr::Binary { left, right, .. } => 1 + tree_height(left).max(tree_height(right)),
     }
 }
 
@@ -52,7 +61,34 @@ impl<'src> Parser<'src> {
     }
 
     fn expression(&mut self, nesting: usize) -> Result<Expr, ParseError> {
-        self.unary(nesting)
+        self.factor(nesting)
+    }
+
+    fn factor(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        let mut expr = self.unary(nesting)?;
+        let mut height = tree_height(&expr);
+
+        while let Some(token) = self.peek() {
+            let op = match token.kind {
+                SyntaxKind::Star => BinaryOp::Multiply,
+                SyntaxKind::Slash => BinaryOp::Divide,
+                _ => break,
+            };
+            self.bump();
+            let right = self.unary(nesting)?;
+            let next_height = 1 + height.max(tree_height(&right));
+            if nesting + next_height > MAX_NESTING {
+                return Err(error_at(token, "expression nesting limit exceeded"));
+            }
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op,
+                right: Box::new(right),
+            };
+            height = next_height;
+        }
+
+        Ok(expr)
     }
 
     fn unary(&mut self, nesting: usize) -> Result<Expr, ParseError> {
@@ -331,5 +367,87 @@ mod tests {
         assert_eq!(error.message, "expression nesting limit exceeded");
         assert_eq!(error.range.start().0, MAX_NESTING);
         assert_eq!(error.range.end().0, MAX_NESTING + 1);
+    }
+
+    #[test]
+    fn parses_multiplicative_chains_and_unary_operands() {
+        for (source, expected) in [
+            ("8 / 4 / 2", "(/ (/ 8 4) 2)"),
+            ("8 * 4 / 2", "(/ (* 8 4) 2)"),
+            ("8 / (4 / 2)", "(/ 8 (group (/ 4 2)))"),
+            ("-8 * 4 / 2", "(/ (* (- 8) 4) 2)"),
+            ("8 * // é\n2", "(* 8 2)"),
+            ("8 / 0", "(/ 8 0)"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn reports_multiplicative_operand_errors() {
+        for (source, message, start, end) in [
+            ("8 *", "expected an expression", 3, 3),
+            ("8 **2", "expected an expression", 3, 4),
+            ("8 / é", "invalid token", 4, 6),
+            ("(8 /)", "expected an expression", 4, 5),
+            ("8 / 2 3", "expected end of input", 6, 7),
+        ] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+
+    #[test]
+    fn bounds_the_height_of_a_left_fold() {
+        let at_limit = format!("1{}", " * 1".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured binary height is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}1{}",
+                "(* ".repeat(MAX_NESTING),
+                " 1)".repeat(MAX_NESTING)
+            )
+        );
+
+        let error = parse(&format!("{at_limit} * 1")).unwrap_err();
+        let operator = 2 + 4 * MAX_NESTING;
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, operator);
+        assert_eq!(error.range.end().0, operator + 1);
+    }
+
+    #[test]
+    fn includes_both_operand_heights() {
+        let signs = "-".repeat(MAX_NESTING - 1);
+        for source in [format!("{signs}1 * 1"), format!("1 * {signs}1")] {
+            assert!(parse(&source).is_ok(), "{source}");
+        }
+
+        let signs = "-".repeat(MAX_NESTING);
+        for (source, operator) in [
+            (format!("{signs}1 * 1"), MAX_NESTING + 2),
+            (format!("1 * {signs}1"), 2),
+        ] {
+            let error = parse(&source).unwrap_err();
+            assert_eq!(error.message, "expression nesting limit exceeded");
+            assert_eq!(error.range.start().0, operator);
+            assert_eq!(error.range.end().0, operator + 1);
+        }
+    }
+
+    #[test]
+    fn includes_enclosing_grouping_in_the_binary_budget() {
+        let at_limit = format!("(1{})", " * 1".repeat(MAX_NESTING - 1));
+        assert!(parse(&at_limit).is_ok());
+
+        let too_deep = format!("(1{})", " * 1".repeat(MAX_NESTING));
+        let error = parse(&too_deep).unwrap_err();
+        let operator = 3 + 4 * (MAX_NESTING - 1);
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, operator);
+        assert_eq!(error.range.end().0, operator + 1);
     }
 }
