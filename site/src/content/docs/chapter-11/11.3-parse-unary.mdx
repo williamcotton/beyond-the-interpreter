@@ -1,0 +1,696 @@
+---
+title: 11.3 — Parse unary negation
+slug: chapter-11/11.3-parse-unary
+description: Parse prefix minus recursively, preserve its operand structure, and share the nesting budget with grouping.
+prev:
+  link: /chapter-11/11.2-parse-grouping/
+  label: 11.2 · Parse nested parentheses
+next: false
+---
+
+<p className="book-subtitle">Chapter 11 · Parsing Expressions by Hand</p>
+
+Our scanner reads `-123` as a minus token followed by a number. The parser
+currently stops at that minus: it knows how to begin a number or grouping,
+but not an operation. We already have the expression node we want:
+
+```text title="The tree to build for -123"
+Unary: Negate
+  │ right operand
+  ▼
+Number: 123
+```
+
+A prefix minus needs an operand. That operand might start with another
+minus, as in `--123`, or a parenthesis, as in `-(123)`. This gives us one
+more recursive grammar rule:
+
+```text title="Add unary expressions between expression and primary"
+expression → unary
+unary      → "-" unary | primary
+primary    → NUMBER | "(" expression ")"
+```
+
+The minus branch calls `unary` again, so it can recognize a chain of prefix
+operators. Otherwise it falls back to `primary`. This is the arithmetic
+subset of the [unary rule in Crafting Interpreters](https://craftinginterpreters.com/parsing-expressions.html#recursive-descent-parsing).
+
+Start from [Section 11.2](/chapter-11/11.2-parse-grouping/), with your terminal
+in the **Rust workspace directory**. We'll add this rule to the existing
+parser and reuse `UnaryOp::Negate`, `Expr::Unary` and the prefix printer.
+
+## Read the operand before building its parent
+
+In **`rlox/crates/syntax/src/parser.rs`**, extend the expression import:
+
+```diff title="rlox/crates/syntax/src/parser.rs · import the existing unary operator"
+-use crate::expr::Expr;
++use crate::expr::{Expr, UnaryOp};
+```
+
+Inside the `Parser` impl, **after `expression` and before `primary`**, insert:
+
+```rust title="rlox/crates/syntax/src/parser.rs · insert the unary rule"
+    fn unary(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        match self.peek() {
+            Some(token) if token.kind == SyntaxKind::Minus => {
+                if nesting >= MAX_NESTING {
+                    return Err(self.error("expression nesting limit exceeded"));
+                }
+                self.bump();
+                let right = self.unary(nesting + 1)?;
+                Ok(Expr::Unary {
+                    op: UnaryOp::Negate,
+                    right: Box::new(right),
+                })
+            }
+            _ => self.primary(nesting),
+        }
+    }
+```
+
+The guarded arm recognizes the minus token, using the same
+[match-guard syntax](https://doc.rust-lang.org/book/ch19-03-pattern-syntax.html#extra-conditionals-with-match-guards)
+we used to check a closing parenthesis. After checking the budget, `bump`
+consumes the operator. The recursive call then reads its operand from the
+same cursor.
+
+That call must return a complete child before we can move it into
+`Box::new(right)`. Only then do we construct the parent unary node. If the
+operand fails, `?` returns the error unchanged; there is no placeholder node.
+The Rust Book explains this form of
+[error propagation](https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html#propagating-errors).
+
+The fallback arm doesn't advance the cursor. It lets `primary` decide
+whether the current token begins a number or a grouping. If it is neither,
+that existing rule reports `expected an expression`. At EOF it reports
+that expectation at the source end.
+
+In the existing `expression` method, change its delegation:
+
+```diff title="rlox/crates/syntax/src/parser.rs · enter unary before primary"
+     fn expression(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+-        self.primary(nesting)
++        self.unary(nesting)
+     }
+```
+
+The public `parse` wrapper still enters `expression(0)` and checks for
+leftover input. The grouping rule still calls `expression` for its child,
+so it now accepts a leading minus inside parentheses too. No change to
+`primary`, `number`, the cursor helpers or the existing tests is needed.
+
+Check the edits together:
+
+```sh
+cargo check -p rlox-syntax
+cargo test -p rlox-syntax parser::tests
+```
+
+The ten existing parser tests should still pass. Numbers and grouping
+reach their old rules through the new fallback.
+
+## Follow a chain back out
+
+For `--123`, both minus tokens are consumed before the number is returned:
+
+```text title="Cursor and return trace for --123"
+[0..1) -   [1..2) -   [2..5) 123
+
+unary(0) consumes the first minus
+  unary(1) consumes the second minus
+    unary(2) delegates to primary; number consumes 123 → 123
+  unary(1) wraps that child → (- 123)
+unary(0) wraps that child → (- (- 123))
+```
+
+The first operator in the source becomes the outer node. We don't fold
+the two negations into a number or perform arithmetic while parsing.
+Calling `primary` directly after a minus would handle a number but reject
+the next minus in a chain; calling `unary` is what admits `--123`.
+
+Grouping remains visible in the tree:
+
+```text title="Which expression owns the grouping?"
+-(123) → (- (group 123))
+(-123) → (group (- 123))
+```
+
+In the first case, the unary operand is a grouped number. In the second,
+the grouping's child is a unary expression. Both use the same existing
+expression types, connected in different orders.
+
+## Share the depth budget
+
+The new rule uses the same `nesting` argument as grouping. Entering a unary
+operand adds one; entering a group adds one. Falling through from unary to
+primary adds nothing, because that grammar call hasn't added a tree node.
+
+The limit therefore means **64 grouping or negation nodes combined along
+a path to a number**. Sixty-four negations fit; 32 groups around 32
+negations fit; 32 groups around 33 negations exceed the same budget. Giving
+each rule its own separate allowance would miss that combined nesting.
+
+Keep `MAX_NESTING` and its message unchanged. Both recursive sites check
+the argument at their current opening token before descending further.
+This extends the project policy from 11.2 without claiming a portable stack
+capacity. Binary tree depth will need attention when we introduce it.
+
+## Observe the new inputs
+
+In **`rlox/crates/syntax/examples/parse_expression.rs`**, append these entries
+inside the existing source array, **after `"123)",` and before `] {`**.
+Keep all existing entries and the result-display loop:
+
+```rust title="rlox/crates/syntax/examples/parse_expression.rs · append unary inputs"
+        "-123",
+        "--123",
+        "-(123)",
+        "(-123)",
+        "-",
+        "(-)",
+        "-é",
+```
+
+Run:
+
+```sh
+cargo run -p rlox-syntax --example parse_expression
+```
+
+The eleven earlier lines should remain unchanged. Then expect:
+
+```text title="Additional unary observations"
+"-123" => (- 123)
+"--123" => (- (- 123))
+"-(123)" => (- (group 123))
+"(-123)" => (group (- 123))
+"-" => expected an expression [1..1)
+"(-)" => expected an expression [2..3)
+"-é" => invalid token [1..3)
+```
+
+A lone minus reaches EOF while seeking its operand. In `(-)`, the operand
+rule encounters the closing parenthesis instead, so the error points at
+that token. The UTF-8 lexical error still occupies its original two bytes;
+consuming the minus hasn't changed its range or hidden it as trivia.
+
+## Check shape, failures and combined nesting
+
+Append these two tests **inside the existing `tests` module in `parser.rs`,
+after its current tests and before the final closing brace**, separated by
+a blank line:
+
+```rust title="rlox/crates/syntax/src/parser.rs · append unary behavior tests"
+    #[test]
+    fn parses_unary_chains_grouping_and_trivia() {
+        for (source, expected) in [
+            ("-123", "(- 123)"),
+            ("--123", "(- (- 123))"),
+            ("-(123)", "(- (group 123))"),
+            ("(-123)", "(group (- 123))"),
+            (" - // é\n-12.5 ", "(- (- 12.5))"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn reports_unary_operand_and_delimiter_errors() {
+        for (source, message, start, end) in [
+            ("-", "expected an expression", 1, 1),
+            ("--", "expected an expression", 2, 2),
+            ("(-)", "expected an expression", 2, 3),
+            ("-é", "invalid token", 1, 3),
+            ("-123)", "expected end of input", 4, 5),
+            ("(-123", "expected ')'", 5, 5),
+        ] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+```
+
+The success cases distinguish a chain from both grouping positions and
+show that trivia may separate a minus from its operand. The failure cases
+check the operand, outer delimiter and full-input expectations at their
+original byte ranges.
+
+Then append these two tests **inside the same module, after the new
+behavior tests and before the closing brace**, separated by a blank line:
+
+```rust title="rlox/crates/syntax/src/parser.rs · append unary and mixed budget tests"
+    #[test]
+    fn bounds_unary_nesting() {
+        let at_limit = format!("{}1", "-".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured unary depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!("{}1{}", "(- ".repeat(MAX_NESTING), ")".repeat(MAX_NESTING))
+        );
+
+        let error = parse(&format!("-{at_limit}")).unwrap_err();
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, MAX_NESTING);
+        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+    }
+
+    #[test]
+    fn shares_the_budget_between_groups_and_negation() {
+        let groups = MAX_NESTING / 2;
+        let signs = MAX_NESTING - groups;
+        let at_limit = format!(
+            "{}{}1{}",
+            "(".repeat(groups),
+            "-".repeat(signs),
+            ")".repeat(groups)
+        );
+        let expr = parse(&at_limit).expect("the combined depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}{}1{}",
+                "(group ".repeat(groups),
+                "(- ".repeat(signs),
+                ")".repeat(MAX_NESTING)
+            )
+        );
+
+        let too_deep = format!(
+            "{}{}1{}",
+            "(".repeat(groups),
+            "-".repeat(signs + 1),
+            ")".repeat(groups)
+        );
+        let error = parse(&too_deep).unwrap_err();
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, MAX_NESTING);
+        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+    }
+```
+
+The first checks a unary-only path at the boundary and one beyond it. The
+second combines grouping and unary paths, so independently counting their
+budgets would produce a false success. Its additional minus is at byte 64,
+where the next recursive descent would exceed our shared budget. The
+existing all-group boundary test remains unchanged.
+
+Run the focused parser tests, then the workspace checks:
+
+```sh
+cargo test -p rlox-syntax parser::tests
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+All fourteen parser tests and the existing workspace tests should pass.
+We can now parse numbers, grouped expressions and chains of unary negation.
+Next we'll combine operands with multiplication and division.
+
+<details>
+<summary>Complete resulting parser module</summary>
+
+```rust title="rlox/crates/syntax/src/parser.rs · complete resulting file"
+use rlox_text::{TextRange, TextSize};
+
+use crate::expr::{Expr, UnaryOp};
+use crate::{SyntaxKind, Token, scan};
+
+const MAX_NESTING: usize = 64;
+
+#[derive(Debug)]
+pub struct ParseError {
+    pub message: String,
+    pub range: TextRange,
+}
+
+fn error_at(token: Token, message: &str) -> ParseError {
+    let message = if token.kind == SyntaxKind::Error {
+        "invalid token"
+    } else {
+        message
+    };
+    ParseError {
+        message: message.to_owned(),
+        range: token.range,
+    }
+}
+
+pub fn parse(source: &str) -> Result<Expr, ParseError> {
+    let mut parser = Parser::new(source);
+    let expr = parser.expression(0)?;
+    if parser.peek().is_some() {
+        return Err(parser.error("expected end of input"));
+    }
+    Ok(expr)
+}
+
+struct Parser<'src> {
+    source: &'src str,
+    tokens: Vec<Token>,
+    current: usize,
+}
+
+impl<'src> Parser<'src> {
+    fn new(source: &'src str) -> Self {
+        let mut tokens = scan(source);
+        tokens.retain(|token| {
+            !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::LineComment)
+        });
+        Self {
+            source,
+            tokens,
+            current: 0,
+        }
+    }
+
+    fn expression(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        self.unary(nesting)
+    }
+
+    fn unary(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        match self.peek() {
+            Some(token) if token.kind == SyntaxKind::Minus => {
+                if nesting >= MAX_NESTING {
+                    return Err(self.error("expression nesting limit exceeded"));
+                }
+                self.bump();
+                let right = self.unary(nesting + 1)?;
+                Ok(Expr::Unary {
+                    op: UnaryOp::Negate,
+                    right: Box::new(right),
+                })
+            }
+            _ => self.primary(nesting),
+        }
+    }
+
+    fn primary(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        let token = match self.peek() {
+            Some(token) => token,
+            None => return Err(self.error("expected an expression")),
+        };
+        match token.kind {
+            SyntaxKind::Number => self.number(),
+            SyntaxKind::LeftParen => {
+                if nesting >= MAX_NESTING {
+                    return Err(self.error("expression nesting limit exceeded"));
+                }
+                self.bump();
+                let inner = self.expression(nesting + 1)?;
+                match self.peek() {
+                    Some(close) if close.kind == SyntaxKind::RightParen => self.bump(),
+                    _ => return Err(self.error("expected ')'")),
+                }
+                Ok(Expr::Grouping(Box::new(inner)))
+            }
+            _ => Err(self.error("expected an expression")),
+        }
+    }
+
+    fn number(&mut self) -> Result<Expr, ParseError> {
+        let token = match self.peek() {
+            Some(token) => token,
+            None => return Err(self.error("expected a number")),
+        };
+        if token.kind != SyntaxKind::Number {
+            return Err(self.error("expected a number"));
+        }
+
+        let spelling = token
+            .range
+            .slice(self.source)
+            .expect("scanner ranges are valid");
+        let value = spelling
+            .parse::<f64>()
+            .map_err(|_| error_at(token, "invalid number"))?;
+        self.bump();
+        Ok(Expr::Number(value))
+    }
+
+    fn peek(&self) -> Option<Token> {
+        self.tokens.get(self.current).copied()
+    }
+
+    fn bump(&mut self) {
+        self.current += 1;
+    }
+
+    fn error(&self, message: &str) -> ParseError {
+        match self.peek() {
+            Some(token) => error_at(token, message),
+            None => {
+                let end = TextSize(self.source.len());
+                ParseError {
+                    message: message.to_owned(),
+                    range: TextRange::new(end, end).expect("ordered EOF range"),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_NESTING, parse};
+
+    #[test]
+    fn parses_number_spellings_and_surrounding_trivia() {
+        for (source, expected) in [
+            ("0", "0"),
+            ("001.50", "1.5"),
+            (" \t123 // note\n", "123"),
+            (" // é\n12.5 // end", "12.5"),
+        ] {
+            let expr = parse(source).expect("one number");
+            assert_eq!(expr.to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn missing_expression_points_to_source_end() {
+        for source in ["", " \t\n", " // é\n"] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, "expected an expression");
+            assert_eq!(error.range.start().0, source.len());
+            assert_eq!(error.range.end().0, source.len());
+        }
+    }
+
+    #[test]
+    fn rejects_a_second_number() {
+        let error = parse("123 456").unwrap_err();
+        assert_eq!(error.message, "expected end of input");
+        assert_eq!(error.range.start().0, 4);
+        assert_eq!(error.range.end().0, 7);
+    }
+
+    #[test]
+    fn rejects_an_unexpected_token_kind() {
+        let error = parse("hello").unwrap_err();
+        assert_eq!(error.message, "expected an expression");
+        assert_eq!(error.range.start().0, 0);
+        assert_eq!(error.range.end().0, 5);
+    }
+
+    #[test]
+    fn retains_lexical_errors_and_utf8_ranges() {
+        for (source, start, end) in [("é", 0, 2), ("123 é", 4, 6)] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, "invalid token");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+
+    #[test]
+    fn parses_nested_groups_and_trivia() {
+        for (source, expected) in [
+            ("(123)", "(group 123)"),
+            ("((12.5))", "(group (group 12.5))"),
+            ("( // é\n123 )", "(group 123)"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected);
+        }
+    }
+
+    #[test]
+    fn reports_missing_closing_parentheses() {
+        for (source, start, end) in [("(123", 4, 4), ("(123 456)", 5, 8), ("(123 // é\n", 11, 11)]
+        {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, "expected ')'");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+
+    #[test]
+    fn rejects_empty_groups_and_trailing_closes() {
+        let empty = parse("()").unwrap_err();
+        assert_eq!(empty.message, "expected an expression");
+        assert_eq!(empty.range.start().0, 1);
+        assert_eq!(empty.range.end().0, 2);
+
+        let extra = parse("123)").unwrap_err();
+        assert_eq!(extra.message, "expected end of input");
+        assert_eq!(extra.range.start().0, 3);
+        assert_eq!(extra.range.end().0, 4);
+    }
+
+    #[test]
+    fn retains_lexical_errors_inside_groups() {
+        for (source, start, end) in [("(é)", 1, 3), ("(123 é)", 5, 7)] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, "invalid token");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+
+    #[test]
+    fn checks_both_sides_of_the_nesting_limit() {
+        let at_limit = format!("{}1{}", "(".repeat(MAX_NESTING), ")".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}1{}",
+                "(group ".repeat(MAX_NESTING),
+                ")".repeat(MAX_NESTING)
+            )
+        );
+
+        let too_deep = format!("({at_limit})");
+        let error = parse(&too_deep).unwrap_err();
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, MAX_NESTING);
+        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+    }
+
+    #[test]
+    fn parses_unary_chains_grouping_and_trivia() {
+        for (source, expected) in [
+            ("-123", "(- 123)"),
+            ("--123", "(- (- 123))"),
+            ("-(123)", "(- (group 123))"),
+            ("(-123)", "(group (- 123))"),
+            (" - // é\n-12.5 ", "(- (- 12.5))"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn reports_unary_operand_and_delimiter_errors() {
+        for (source, message, start, end) in [
+            ("-", "expected an expression", 1, 1),
+            ("--", "expected an expression", 2, 2),
+            ("(-)", "expected an expression", 2, 3),
+            ("-é", "invalid token", 1, 3),
+            ("-123)", "expected end of input", 4, 5),
+            ("(-123", "expected ')'", 5, 5),
+        ] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+
+    #[test]
+    fn bounds_unary_nesting() {
+        let at_limit = format!("{}1", "-".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured unary depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!("{}1{}", "(- ".repeat(MAX_NESTING), ")".repeat(MAX_NESTING))
+        );
+
+        let error = parse(&format!("-{at_limit}")).unwrap_err();
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, MAX_NESTING);
+        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+    }
+
+    #[test]
+    fn shares_the_budget_between_groups_and_negation() {
+        let groups = MAX_NESTING / 2;
+        let signs = MAX_NESTING - groups;
+        let at_limit = format!(
+            "{}{}1{}",
+            "(".repeat(groups),
+            "-".repeat(signs),
+            ")".repeat(groups)
+        );
+        let expr = parse(&at_limit).expect("the combined depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}{}1{}",
+                "(group ".repeat(groups),
+                "(- ".repeat(signs),
+                ")".repeat(MAX_NESTING)
+            )
+        );
+
+        let too_deep = format!(
+            "{}{}1{}",
+            "(".repeat(groups),
+            "-".repeat(signs + 1),
+            ")".repeat(groups)
+        );
+        let error = parse(&too_deep).unwrap_err();
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, MAX_NESTING);
+        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting parsed-expression example</summary>
+
+```rust title="rlox/crates/syntax/examples/parse_expression.rs · complete resulting file"
+use rlox_syntax::parser::parse;
+
+fn main() {
+    for source in [
+        " 123 // note\n",
+        "123 456",
+        "",
+        "é",
+        "(123)",
+        "((12.5))",
+        "( // é\n123 )",
+        "()",
+        "(123",
+        "(123 456)",
+        "123)",
+        "-123",
+        "--123",
+        "-(123)",
+        "(-123)",
+        "-",
+        "(-)",
+        "-é",
+    ] {
+        match parse(source) {
+            Ok(expr) => println!("{source:?} => {}", expr.to_prefix()),
+            Err(error) => println!(
+                "{source:?} => {} [{}..{})",
+                error.message,
+                error.range.start().0,
+                error.range.end().0,
+            ),
+        }
+    }
+}
+```
+
+</details>

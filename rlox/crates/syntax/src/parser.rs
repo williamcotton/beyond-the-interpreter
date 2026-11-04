@@ -1,6 +1,6 @@
 use rlox_text::{TextRange, TextSize};
 
-use crate::expr::Expr;
+use crate::expr::{Expr, UnaryOp};
 use crate::{SyntaxKind, Token, scan};
 
 const MAX_NESTING: usize = 64;
@@ -52,7 +52,24 @@ impl<'src> Parser<'src> {
     }
 
     fn expression(&mut self, nesting: usize) -> Result<Expr, ParseError> {
-        self.primary(nesting)
+        self.unary(nesting)
+    }
+
+    fn unary(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        match self.peek() {
+            Some(token) if token.kind == SyntaxKind::Minus => {
+                if nesting >= MAX_NESTING {
+                    return Err(self.error("expression nesting limit exceeded"));
+                }
+                self.bump();
+                let right = self.unary(nesting + 1)?;
+                Ok(Expr::Unary {
+                    op: UnaryOp::Negate,
+                    right: Box::new(right),
+                })
+            }
+            _ => self.primary(nesting),
+        }
     }
 
     fn primary(&mut self, nesting: usize) -> Result<Expr, ParseError> {
@@ -232,6 +249,84 @@ mod tests {
         );
 
         let too_deep = format!("({at_limit})");
+        let error = parse(&too_deep).unwrap_err();
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, MAX_NESTING);
+        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+    }
+
+    #[test]
+    fn parses_unary_chains_grouping_and_trivia() {
+        for (source, expected) in [
+            ("-123", "(- 123)"),
+            ("--123", "(- (- 123))"),
+            ("-(123)", "(- (group 123))"),
+            ("(-123)", "(group (- 123))"),
+            (" - // é\n-12.5 ", "(- (- 12.5))"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn reports_unary_operand_and_delimiter_errors() {
+        for (source, message, start, end) in [
+            ("-", "expected an expression", 1, 1),
+            ("--", "expected an expression", 2, 2),
+            ("(-)", "expected an expression", 2, 3),
+            ("-é", "invalid token", 1, 3),
+            ("-123)", "expected end of input", 4, 5),
+            ("(-123", "expected ')'", 5, 5),
+        ] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(error.range.start().0, start);
+            assert_eq!(error.range.end().0, end);
+        }
+    }
+
+    #[test]
+    fn bounds_unary_nesting() {
+        let at_limit = format!("{}1", "-".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured unary depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!("{}1{}", "(- ".repeat(MAX_NESTING), ")".repeat(MAX_NESTING))
+        );
+
+        let error = parse(&format!("-{at_limit}")).unwrap_err();
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(error.range.start().0, MAX_NESTING);
+        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+    }
+
+    #[test]
+    fn shares_the_budget_between_groups_and_negation() {
+        let groups = MAX_NESTING / 2;
+        let signs = MAX_NESTING - groups;
+        let at_limit = format!(
+            "{}{}1{}",
+            "(".repeat(groups),
+            "-".repeat(signs),
+            ")".repeat(groups)
+        );
+        let expr = parse(&at_limit).expect("the combined depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}{}1{}",
+                "(group ".repeat(groups),
+                "(- ".repeat(signs),
+                ")".repeat(MAX_NESTING)
+            )
+        );
+
+        let too_deep = format!(
+            "{}{}1{}",
+            "(".repeat(groups),
+            "-".repeat(signs + 1),
+            ")".repeat(groups)
+        );
         let error = parse(&too_deep).unwrap_err();
         assert_eq!(error.message, "expression nesting limit exceeded");
         assert_eq!(error.range.start().0, MAX_NESTING);

@@ -212,3 +212,8 @@ Section 11.2 is drafted at `src/content/docs/chapter-11/11.2-parse-grouping.mdx`
 served at `/chapter-11/11.2-parse-grouping/`. Its private cursor, recursive grouping, delimiter errors and 64-group policy
 match the reader implementation and are accepted. Both checkpoints, example
 output, formatting, Clippy and all 60 workspace tests pass locally.
+
+Section 11.3 is drafted at `src/content/docs/chapter-11/11.3-parse-unary.mdx`,
+served at `/chapter-11/11.3-parse-unary/`. Its unary rule, grouped operands and shared nesting budget match the
+implementation and are accepted. Example output, formatting, Clippy and all
+64 workspace tests pass locally.
