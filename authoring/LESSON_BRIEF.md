@@ -20,4 +20,6 @@
 
 **Limits:** Local npm ci proves locked reinstall on the existing checkout, not a fresh hosted Git checkout. GitHub checkout/cache actions, Ubuntu display prerequisites and Linux editor execution remain unobserved. No hosted result claimed; no push, commit, Cursor testing or screenshots.
 
-**Stopping point:** Commit and push the accepted 9.5 pair, then inspect the CI run for that exact commit. Correct any failure within this section and report observed hosted evidence. Do not start Chapter 10.
+**Stopping point:** Accepted 9.5 pair committed/pushed as 1500db7; hosted Project CI succeeded for that exact revision. Record and report the result; await a new assignment before Chapter 10.
+
+**Hosted verification:** [Project CI](https://github.com/williamcotton/beyond-the-interpreter/actions/runs/41790292594) passed on 1500db7acb3ee3cb1b69569180a1e06206744f47. Workspace checks and Extension checks both succeeded. Ubuntu 24.04 checkout/Node setup/locked install/type/grammar/package/archive/display prerequisites and both actual-editor modes passed, including post-job cache handling. This supersedes the earlier pending-hosted limits for that revision; Windows remains untested.
