@@ -1,0 +1,1713 @@
+---
+title: 12.3 — Parse numbers and groups without dropping source
+slug: chapter-12/12.3-lossless-groups
+description: Parse number and grouping nodes while retaining trivia, partial syntax and the unconsumed source after an error.
+prev:
+  link: /chapter-12/12.2-lossless-tree/
+  label: 12.2 · Keep every token in a small syntax tree
+next: false
+---
+
+<p className="book-subtitle">Chapter 12 · Building Lossless Trees with Rowan</p>
+
+Our token tree can reconstruct ` ( 001.50 ) `, but its parentheses are
+siblings of the number node. It doesn't yet tell us that the parentheses
+form a group. We need grammar rules to choose which tokens belong inside
+which nodes.
+
+We'll start the concrete parser with numbers and groups. Its tree should
+keep the exact spelling while exposing the group as a parent:
+
+```text title="Every byte belongs to a token; nodes group those tokens"
+Root [0..12)
+  Whitespace [0..1) " "
+  GroupingExpr [1..11)
+    LeftParen [1..2) "("
+    Whitespace [2..3) " "
+    NumberExpr [3..9)
+      Number [3..9) "001.50"
+    Whitespace [9..10) " "
+    RightParen [10..11) ")"
+  Whitespace [11..12) " "
+```
+
+There is another requirement: `(12.5` is incomplete, but an editor still
+needs a tree for the characters that exist. A syntax error will accompany
+the tree instead of replacing it. We'll stop at the first error for now,
+finish any open nodes, and keep the remaining tokens at the root.
+
+Start from [12.2](/chapter-12/12.2-lossless-tree/), in the **Rust workspace
+directory**. The existing arithmetic parser and the small `token_tree`
+example stay in place. Our new parser will live in `cst`, so its limited
+grammar is explicit while we migrate one rule at a time.
+
+## Establish the result and the token cursor
+
+Add the module declaration and the one new node kind in
+**`rlox/crates/syntax/src/lib.rs`**:
+
+```diff title="rlox/crates/syntax/src/lib.rs · module declaration"
++pub mod cst;
+ pub mod expr;
+```
+
+```diff title="rlox/crates/syntax/src/lib.rs · grouping kind"
+     NumberExpr,
++    GroupingExpr,
+ }
+```
+
+The existing kind macro supplies its raw conversion too. We don't change
+Logos or any token rule.
+
+Create **`rlox/crates/syntax/src/cst.rs`** with these imports and result
+definitions. We'll complete this module before compiling it:
+
+```rust title="rlox/crates/syntax/src/cst.rs · imports and result"
+use rlox_text::{SourceTooLarge, checked_range, checked_size, slice};
+use rowan::GreenNodeBuilder;
+
+use crate::parser::ParseError;
+use crate::tree::SyntaxNode;
+use crate::{SyntaxKind, Token, scan};
+
+const MAX_NESTING: usize = 64;
+
+#[derive(Debug)]
+pub struct Parse {
+    pub root: SyntaxNode,
+    pub errors: Vec<ParseError>,
+}
+```
+
+`Parse` keeps a tree and located errors together. We reuse the existing
+`ParseError` record: its message and range don't depend on an owned
+`Expr`. This parser emits concrete nodes instead of allocating expression
+boxes. Its error list will contain zero or one error at this step.
+
+The public function will return `Result<Parse, SourceTooLarge>`. An input
+that can't fit our byte coordinates still fails before parsing. Ordinary
+syntax errors fit those coordinates and leave a useful `Parse`, including
+its root. Callers must inspect `errors` to decide whether syntax succeeded;
+`Ok` alone means the input was representable.
+
+Append this private state and its implementation block to **`cst.rs`**:
+
+```rust title="rlox/crates/syntax/src/cst.rs · cursor and builder state"
+struct Parser<'src> {
+    source: &'src str,
+    tokens: Vec<Token>,
+    current: usize,
+    builder: GreenNodeBuilder<'static>,
+}
+
+impl<'src> Parser<'src> {
+    fn new(source: &'src str) -> Result<Self, SourceTooLarge> {
+        Ok(Self {
+            source,
+            tokens: scan(source)?,
+            current: 0,
+            builder: GreenNodeBuilder::new(),
+        })
+    }
+
+    fn peek(&self) -> Option<Token> {
+        self.tokens.get(self.current).copied()
+    }
+
+    fn bump(&mut self) {
+        let token = self.tokens[self.current];
+        let spelling = slice(self.source, token.range).expect("scanner ranges are valid");
+        self.builder.token(token.kind.into_raw(), spelling);
+        self.current += 1;
+    }
+
+    fn eat_trivia(&mut self) {
+        while let Some(token) = self.peek() {
+            if !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::LineComment) {
+                break;
+            }
+            self.bump();
+        }
+    }
+
+    fn error(&self, message: &str) -> ParseError {
+        match self.peek() {
+            Some(token) => ParseError {
+                message: if token.kind == SyntaxKind::Error {
+                    "invalid token".to_owned()
+                } else {
+                    message.to_owned()
+                },
+                range: token.range,
+            },
+            None => {
+                let end = checked_size(self.source.len()).expect("validated source length");
+                ParseError {
+                    message: message.to_owned(),
+                    range: checked_range(end, end).expect("ordered EOF range"),
+                }
+            }
+        }
+    }
+}
+```
+
+Unlike the owned parser's constructor, `new` keeps every token. `peek`
+looks at the current token without skipping anything. `bump` writes that
+token's exact spelling into the currently open builder node, then advances
+once. A token is emitted exactly when the cursor passes it.
+
+`GreenNodeBuilder::new` owns its cache. The builder's `<'static>` parameter
+means it doesn't borrow an external cache; it doesn't require `source` to
+be a static string. The source has the separate `'src` lifetime already
+familiar from our parser. See the [builder constructor](https://docs.rs/rowan/0.17.0/rowan/struct.GreenNodeBuilder.html#method.new)
+and Rust Book's [lifetime discussion](https://doc.rust-lang.org/book/ch10-03-lifetime-syntax.html#the-static-lifetime).
+
+`eat_trivia` advances through whitespace and line comments using the same
+emission path. It never discards them. We'll call it at explicit grammar
+boundaries rather than hiding it inside lookahead. The `error` helper
+locates the current token, classifies lexical `Error` tokens, or creates an
+empty range at EOF without inventing token text.
+
+## Let the grammar open and close nodes
+
+Our grammar starts with the same two choices introduced in Chapter 11:
+
+```text
+expression → NUMBER | "(" expression ")"
+```
+
+This is only the concrete parser's current grammar. Unary and infix rules
+remain in the owned arithmetic parser; we'll migrate them in following
+sections. Rowan stores the nodes we ask for. It doesn't choose grammar
+rules for us, as the [recursive-descent discussion in Crafting Interpreters](https://craftinginterpreters.com/parsing-expressions.html#recursive-descent-parsing)
+helps explain.
+
+Before adding the rules, decide where trivia belongs. Leading and trailing
+source trivia belongs to `Root`. Inside parentheses, trivia before or after
+the operand belongs to `GroupingExpr`. A `NumberExpr` contains just its
+number token. That policy gives the byte tree at the start of this section:
+spaces around the number remain siblings of its node inside the group.
+
+Insert these methods **inside `impl Parser`, after `error` and before the
+implementation's closing brace**:
+
+```rust title="rlox/crates/syntax/src/cst.rs · append grammar methods inside impl"
+    fn expression(&mut self, nesting: usize) -> Result<(), ParseError> {
+        self.eat_trivia();
+        match self.peek() {
+            Some(token) if token.kind == SyntaxKind::Number => {
+                self.builder.start_node(SyntaxKind::NumberExpr.into_raw());
+                self.bump();
+                self.builder.finish_node();
+                Ok(())
+            }
+            Some(token) if token.kind == SyntaxKind::LeftParen => self.group(nesting),
+            _ => Err(self.error("expected an expression")),
+        }
+    }
+
+    fn group(&mut self, nesting: usize) -> Result<(), ParseError> {
+        if nesting >= MAX_NESTING {
+            return Err(self.error("expression nesting limit exceeded"));
+        }
+        self.builder.start_node(SyntaxKind::GroupingExpr.into_raw());
+        self.bump();
+        let result = match self.expression(nesting + 1) {
+            Err(error) => Err(error),
+            Ok(()) => {
+                self.eat_trivia();
+                match self.peek() {
+                    Some(token) if token.kind == SyntaxKind::RightParen => {
+                        self.bump();
+                        Ok(())
+                    }
+                    _ => Err(self.error("expected ')'")),
+                }
+            }
+        };
+        self.builder.finish_node();
+        result
+    }
+```
+
+`expression` emits leading trivia into the current container, then chooses
+a number or a group. A number opens its node, emits its token and closes
+the node. It keeps `001.50` as text; it doesn't convert it to `f64`.
+
+A group opens its node before consuming `(`. It asks `expression` to build
+the operand inside it, then looks for `)`. The existing budget still allows
+64 nested group wrappers and reports the next opening parenthesis as the
+limit error. We check that before opening another node or recursing.
+
+There is one consequential difference from our owned parser: **a failing
+child cannot bypass the matching `finish_node`**. We save the child's
+result in `result`, close the grouping node, and only then return that
+result. We deliberately don't use `?` immediately after opening the group;
+that would return early with an unclosed node. This follows the same
+[Result control flow](https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html#propagating-errors)
+we already use, with builder balance as an extra responsibility.
+
+For `(12.5`, the number node finishes, the group reports a missing close
+at EOF, and the group still finishes. Its text is the five bytes `(12.5`.
+We haven't fabricated a `)` token to make the tree look complete.
+
+## Finish the root even after an error
+
+Insert this public function **after `Parse` and before `struct Parser`**
+in **`cst.rs`**:
+
+```rust title="rlox/crates/syntax/src/cst.rs · public entry point"
+pub fn parse(source: &str) -> Result<Parse, SourceTooLarge> {
+    let mut parser = Parser::new(source)?;
+    parser.builder.start_node(SyntaxKind::Root.into_raw());
+    let mut errors = Vec::new();
+    match parser.expression(0) {
+        Err(error) => errors.push(error),
+        Ok(()) => {
+            parser.eat_trivia();
+            if parser.peek().is_some() {
+                errors.push(parser.error("expected end of input"));
+            }
+        }
+    }
+
+    while parser.current < parser.tokens.len() {
+        parser.bump();
+    }
+    parser.builder.finish_node();
+    let root = SyntaxNode::new_root(parser.builder.finish());
+    Ok(Parse { root, errors })
+}
+```
+
+The function opens one root around the whole operation. After a successful
+expression, it consumes trailing trivia and rejects a leftover non-trivia
+token. On either kind of syntax failure it records the first error. Once
+the expression rule returns, all its group nodes are closed.
+
+The final loop emits every remaining token directly into `Root`. It
+advances the cursor on every iteration, so it can't retry the same failing
+token indefinitely. Finally we close the root and create its red handle.
+Even empty or malformed input has a balanced tree covering the source.
+
+Consider `(1 @)`. The group has already consumed `(1 ` when `@` prevents
+it from finding its close. The partial group finishes, and the suffix is
+kept outside it:
+
+```text title="First-error policy: close the partial group, then keep the suffix"
+Root [0..5)
+  GroupingExpr [0..3) "(1 "
+  Error [3..4) "@"
+  RightParen [4..5) ")"
+error: invalid token [3..4)
+```
+
+The group still contains its opening parenthesis, number node and space;
+this outline abbreviates those children to show the boundary. The root
+reconstructs `(1 @)` exactly. We aren't resuming the grammar or attaching
+that suffix back to the group yet. Keeping it visible is the first step
+toward recovery, which we'll refine after the arithmetic rules are in place.
+
+The module is now complete enough to check:
+
+```sh
+cargo check --workspace --all-targets
+```
+
+## Inspect a complete group and an incomplete one
+
+Create **`rlox/crates/syntax/examples/parse_cst.rs`**:
+
+```rust title="rlox/crates/syntax/examples/parse_cst.rs · complete initial file"
+use rlox_syntax::cst::parse;
+
+fn main() {
+    for source in [" ( 001.50 ) ", "(12.5", "(1 @)", "1 + 2"] {
+        match parse(source) {
+            Ok(parsed) => {
+                println!("source: {source:?}");
+                for child in parsed.root.children_with_tokens() {
+                    println!(
+                        "  {:?} [{}..{}) {:?}",
+                        child.kind(),
+                        usize::from(child.text_range().start()),
+                        usize::from(child.text_range().end()),
+                        child.to_string()
+                    );
+                }
+                for error in parsed.errors {
+                    println!(
+                        "error: {} [{}..{})",
+                        error.message,
+                        usize::from(error.range.start()),
+                        usize::from(error.range.end())
+                    );
+                }
+                println!("reconstructed: {:?}", parsed.root.to_string());
+            }
+            Err(error) => eprintln!("{error}"),
+        }
+    }
+}
+```
+
+Run:
+
+```sh
+cargo run -p rlox-syntax --example parse_cst
+```
+
+For the complete group, expect:
+
+```text
+source: " ( 001.50 ) "
+  Whitespace [0..1) " "
+  GroupingExpr [1..11) "( 001.50 )"
+  Whitespace [11..12) " "
+reconstructed: " ( 001.50 ) "
+```
+
+For the missing close:
+
+```text
+source: "(12.5"
+  GroupingExpr [0..5) "(12.5"
+error: expected ')' [5..5)
+reconstructed: "(12.5"
+```
+
+The example also shows `(1 @)` with the suffix boundary above, and
+`1 + 2` with `expected end of input` at `[2..3)`. The latter is expected:
+this concrete parser hasn't learned binary expressions. The older
+`parse_expression` example still accepts them using the owned parser.
+
+## Check structure, errors and source together
+
+Append this test module to **`rlox/crates/syntax/src/cst.rs`**:
+
+```rust title="rlox/crates/syntax/src/cst.rs · append tests"
+#[cfg(test)]
+mod tests {
+    use super::{MAX_NESTING, parse};
+    use crate::SyntaxKind;
+
+    #[test]
+    fn groups_numbers_and_owns_trivia_at_the_container() {
+        let source = " ( 001.50 ) ";
+        let parsed = parse(source).expect("small source");
+        assert!(parsed.errors.is_empty());
+        assert_eq!(parsed.root.to_string(), source);
+        let group = parsed.root.first_child().expect("group");
+        assert_eq!(group.kind(), SyntaxKind::GroupingExpr);
+        assert_eq!(usize::from(group.text_range().start()), 1);
+        assert_eq!(usize::from(group.text_range().end()), 11);
+        assert_eq!(group.to_string(), "( 001.50 )");
+        let number = group.first_child().expect("number");
+        assert_eq!(number.kind(), SyntaxKind::NumberExpr);
+        assert_eq!(number.parent(), Some(group.clone()));
+        assert_eq!(number.to_string(), "001.50");
+        assert_eq!(usize::from(number.text_range().start()), 3);
+        assert_eq!(usize::from(number.text_range().end()), 9);
+        let kinds: Vec<_> = group
+            .children_with_tokens()
+            .map(|child| child.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SyntaxKind::LeftParen,
+                SyntaxKind::Whitespace,
+                SyntaxKind::NumberExpr,
+                SyntaxKind::Whitespace,
+                SyntaxKind::RightParen
+            ]
+        );
+        assert_eq!(parsed.root.children_with_tokens().count(), 3);
+    }
+
+    #[test]
+    fn preserves_source_for_success_and_first_failure() {
+        for source in [
+            "",
+            " // é\n",
+            "001.50",
+            "((12.5))",
+            " // é\n(12.5 // end",
+            "()",
+            "(1 @)",
+            "é",
+            "1 2",
+            "1 + 2",
+            "((1) extra)",
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.root.kind(), SyntaxKind::Root);
+            assert_eq!(parsed.root.to_string(), source);
+            assert_eq!(usize::from(parsed.root.text_range().start()), 0);
+            assert_eq!(usize::from(parsed.root.text_range().end()), source.len());
+            assert!(parsed.errors.len() <= 1);
+        }
+        for source in ["001.50", "((12.5))", " // é\n(12.5) // end"] {
+            assert!(parse(source).expect("small source").errors.is_empty());
+        }
+    }
+
+    #[test]
+    fn reports_located_errors_and_retains_the_suffix() {
+        for (source, message, start, end) in [
+            ("", "expected an expression", 0, 0),
+            (" // é\n", "expected an expression", 7, 7),
+            ("(12.5", "expected ')'", 5, 5),
+            ("()", "expected an expression", 1, 2),
+            ("(1 @)", "invalid token", 3, 4),
+            ("é", "invalid token", 0, 2),
+            ("1 2", "expected end of input", 2, 3),
+            ("1 + 2", "expected end of input", 2, 3),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.errors.len(), 1, "{source:?}");
+            let error = &parsed.errors[0];
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
+            assert_eq!(parsed.root.to_string(), source);
+        }
+        let missing = parse("(12.5").expect("small source");
+        assert_eq!(
+            missing
+                .root
+                .first_child()
+                .expect("partial group")
+                .to_string(),
+            "(12.5"
+        );
+        let invalid = parse("(1 @)").expect("small source");
+        assert_eq!(
+            invalid
+                .root
+                .first_child()
+                .expect("partial group")
+                .to_string(),
+            "(1 "
+        );
+        let suffix: Vec<_> = invalid
+            .root
+            .children_with_tokens()
+            .skip(1)
+            .map(|element| (element.kind(), element.to_string()))
+            .collect();
+        assert_eq!(
+            suffix,
+            vec![
+                (SyntaxKind::Error, "@".to_owned()),
+                (SyntaxKind::RightParen, ")".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn bounds_group_nesting_without_discarding_source() {
+        let source = format!("{}1{}", "(".repeat(MAX_NESTING), ")".repeat(MAX_NESTING));
+        let parsed = parse(&source).expect("small source");
+        assert!(parsed.errors.is_empty());
+        assert_eq!(parsed.root.to_string(), source);
+        let too_deep = format!("({source})");
+        let parsed = parse(&too_deep).expect("small source");
+        assert_eq!(parsed.errors.len(), 1);
+        assert_eq!(
+            parsed.errors[0].message,
+            "expression nesting limit exceeded"
+        );
+        assert_eq!(usize::from(parsed.errors[0].range.start()), MAX_NESTING);
+        assert_eq!(usize::from(parsed.errors[0].range.end()), MAX_NESTING + 1);
+        assert_eq!(parsed.root.to_string(), too_deep);
+    }
+}
+```
+
+The group test checks both parentage and the trivia policy. Reconstruction
+cases include incomplete groups, lexical errors and leftover tokens. The
+error assertions distinguish an EOF position from an offending token's
+range, including a two-byte unsupported character. The depth test checks
+both sides of the existing budget and verifies that even the rejected
+input keeps every byte.
+
+Run:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run -p rlox-syntax --example parse_expression
+```
+
+The existing arithmetic example should keep its output. Our concrete
+parser now gives numbers and groups a source-preserving structure, with
+located errors alongside partial trees. Next we'll add unary operators
+without giving up those properties.
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/src/lib.rs</summary>
+
+```rust title="rlox/crates/syntax/src/lib.rs · complete resulting file"
+pub mod cst;
+pub mod expr;
+pub mod parser;
+pub mod tree;
+
+use logos::Logos;
+
+use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size};
+
+macro_rules! syntax_kinds {
+    ($( $(#[$attribute:meta])* $kind:ident, )*) => {
+        #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[repr(u16)]
+        pub enum SyntaxKind {
+            $( $(#[$attribute])* $kind, )*
+        }
+
+        impl SyntaxKind {
+            pub fn into_raw(self) -> rowan::SyntaxKind {
+                rowan::SyntaxKind(self as u16)
+            }
+
+            pub fn from_raw(raw: rowan::SyntaxKind) -> Option<Self> {
+                match raw.0 {
+                    $(value if value == Self::$kind as u16 => Some(Self::$kind),)*
+                    _ => None,
+                }
+            }
+
+            #[cfg(test)]
+            const ALL: &'static [Self] = &[$(Self::$kind,)*];
+        }
+    };
+}
+
+syntax_kinds! {
+    #[token("(")]
+    LeftParen,
+    #[token(")")]
+    RightParen,
+    #[token("{")]
+    LeftBrace,
+    #[token("}")]
+    RightBrace,
+    #[token(",")]
+    Comma,
+    #[token(".")]
+    Dot,
+    #[token("-")]
+    Minus,
+    #[token("+")]
+    Plus,
+    #[token(";")]
+    Semicolon,
+    #[token("/")]
+    Slash,
+    #[token("*")]
+    Star,
+    #[token("!")]
+    Bang,
+    #[token("!=")]
+    BangEqual,
+    #[token("=")]
+    Equal,
+    #[token("==")]
+    EqualEqual,
+    #[token(">")]
+    Greater,
+    #[token(">=")]
+    GreaterEqual,
+    #[token("<")]
+    Less,
+    #[token("<=")]
+    LessEqual,
+    #[token("and")]
+    And,
+    #[token("class")]
+    Class,
+    #[token("else")]
+    Else,
+    #[token("false")]
+    False,
+    #[token("for")]
+    For,
+    #[token("fun")]
+    Fun,
+    #[token("if")]
+    If,
+    #[token("nil")]
+    Nil,
+    #[token("or")]
+    Or,
+    #[token("print")]
+    Print,
+    #[token("return")]
+    Return,
+    #[token("super")]
+    Super,
+    #[token("this")]
+    This,
+    #[token("true")]
+    True,
+    #[token("var")]
+    Var,
+    #[token("while")]
+    While,
+    #[regex(r#""[^"]*""#)]
+    String,
+    #[regex(r"[0-9]+(\.[0-9]+)?")]
+    Number,
+    #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
+    Identifier,
+    #[regex(r"[ \t\r\n]+")]
+    Whitespace,
+    #[regex(r"//[^\n]*", allow_greedy = true)]
+    LineComment,
+    Error,
+    Root,
+    NumberExpr,
+    GroupingExpr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+
+pub fn scan(source: &str) -> Result<Vec<Token>, SourceTooLarge> {
+    checked_size(source.len())?;
+    let mut tokens = Vec::new();
+
+    for (result, span) in SyntaxKind::lexer(source).spanned() {
+        let kind = match result {
+            Ok(kind) => kind,
+            Err(()) => SyntaxKind::Error,
+        };
+        let range = checked_range(
+            checked_size(span.start).expect("validated source length"),
+            checked_size(span.end).expect("validated source length"),
+        )
+        .expect("Logos spans are ordered");
+
+        tokens.push(Token { kind, range });
+    }
+
+    Ok(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextSize, checked_range, checked_size, slice};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()=!").expect("small test source");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: checked_range(TextSize::new(1), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: checked_range(TextSize::new(2), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: checked_range(TextSize::new(3), TextSize::new(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").expect("small test source").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source).expect("small test source");
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(slice(source, tokens[0].range), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(slice(source, tokens[1].range), Some("!"));
+    }
+
+    #[test]
+    fn scans_adjacent_paired_operators() {
+        assert_eq!(
+            scan("!===").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::EqualEqual,
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_lookahead_preserves_the_next_character() {
+        assert_eq!(
+            scan("!é(").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(1), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: checked_range(TextSize::new(3), TextSize::new(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn single_operator_can_end_the_source() {
+        for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifiers_stop_before_operators() {
+        assert_eq!(
+            scan("a_2!=other").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: checked_range(TextSize::new(3), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(5), TextSize::new(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn identifiers_can_end_the_source() {
+        for source in ["_", "A9", "printer"] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn number_and_name_boundaries_preserve_unknown_characters() {
+        assert_eq!(
+            scan("2aé_b").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Number,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(1), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(4), TextSize::new(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_whitespace_between_tokens() {
+        assert_eq!(
+            scan("a \t\r\n!= b").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(1), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: checked_range(TextSize::new(5), TextSize::new(7)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(7), TextSize::new(8)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(8), TextSize::new(9)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn whitespace_uses_the_lox_character_set() {
+        for source in ["\u{000b}", "\u{000c}", "\u{00a0}"] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_ranges_cover_the_original_source() {
+        for source in [
+            "",
+            " \t\r\n",
+            "a \t\r\n!= b",
+            "a_2!=other",
+            "2aé_b",
+            "a\u{00a0}b",
+            "/",
+            "/name",
+            "//",
+            "//\n",
+            "//é\r\nname",
+            "///",
+            "a//x\nb",
+            "{},.-+;*",
+            "<=>=<>",
+            "<==>==",
+            "a<=b!=c>=d",
+            "(a+b)*c;",
+            "print printer",
+            "for forest",
+            "class classify",
+            "if(if_1)",
+            "return // print\nprinter",
+            "0 001 123.456",
+            "123. .5 -12 +3.5 1.2.3",
+            "123abc a2",
+            "print 0.5;//é\n123.",
+            r#"print "é";"#,
+            r#""a""b";"#,
+            r#""\"name"#,
+            "\"first\nsecond\" // done\n0.5",
+            "\"",
+            "\"é",
+            "\"first\n// still inside",
+            r#""ok""é"#,
+        ] {
+            let mut offset = 0;
+            let mut reconstructed = String::new();
+
+            for token in scan(source).expect("small test source") {
+                let text = slice(source, token.range).expect("valid UTF-8 source slice");
+                assert!(!text.is_empty());
+                let end = offset + text.len();
+                let expected = checked_range(
+                    checked_size(offset).expect("representable offset"),
+                    checked_size(end).expect("representable offset"),
+                )
+                .unwrap();
+                assert_eq!(token.range, expected);
+
+                reconstructed.push_str(text);
+                offset = end;
+            }
+
+            assert_eq!(offset, source.len());
+            assert_eq!(reconstructed, source);
+        }
+    }
+
+    #[test]
+    fn recognizes_single_slashes() {
+        assert_eq!(
+            scan("/").expect("small test source"),
+            vec![Token {
+                kind: SyntaxKind::Slash,
+                range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+            }]
+        );
+        assert_eq!(
+            scan("/name").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Slash,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(1), TextSize::new(5)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_leave_the_line_feed_unread() {
+        assert_eq!(
+            scan("//é\r\nname").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LineComment,
+                    range: checked_range(TextSize::new(0), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(6), TextSize::new(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_can_end_at_eof() {
+        for source in ["//", "//é", "///"] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::LineComment,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_characters_remain_separate_tokens() {
+        assert_eq!(
+            scan("@é💥").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(1), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(3), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_remaining_single_character_punctuation() {
+        for (source, kind) in [
+            ("{", SyntaxKind::LeftBrace),
+            ("}", SyntaxKind::RightBrace),
+            (",", SyntaxKind::Comma),
+            (".", SyntaxKind::Dot),
+            ("-", SyntaxKind::Minus),
+            ("+", SyntaxKind::Plus),
+            (";", SyntaxKind::Semicolon),
+            ("*", SyntaxKind::Star),
+            ("<", SyntaxKind::Less),
+            (">", SyntaxKind::Greater),
+        ] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn recognizes_adjacent_comparison_operators() {
+        assert_eq!(
+            scan("<=>=<>").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Less,
+                    range: checked_range(TextSize::new(4), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Greater,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn comparison_pairs_leave_extra_equals_tokens() {
+        assert_eq!(
+            scan("<==>==").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: checked_range(TextSize::new(2), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: checked_range(TextSize::new(3), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_reserved_words() {
+        for (source, kind) in [
+            ("and", SyntaxKind::And),
+            ("class", SyntaxKind::Class),
+            ("else", SyntaxKind::Else),
+            ("false", SyntaxKind::False),
+            ("for", SyntaxKind::For),
+            ("fun", SyntaxKind::Fun),
+            ("if", SyntaxKind::If),
+            ("nil", SyntaxKind::Nil),
+            ("or", SyntaxKind::Or),
+            ("print", SyntaxKind::Print),
+            ("return", SyntaxKind::Return),
+            ("super", SyntaxKind::Super),
+            ("this", SyntaxKind::This),
+            ("true", SyntaxKind::True),
+            ("var", SyntaxKind::Var),
+            ("while", SyntaxKind::While),
+        ] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn keywords_do_not_split_longer_identifiers() {
+        for source in [
+            "forest",
+            "printer",
+            "classify",
+            "true_value",
+            "_if",
+            "Print",
+        ] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_spelling_comes_from_the_source() {
+        let source = "print printer";
+        let tokens = scan(source).expect("small test source");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::Print,
+                    range: checked_range(TextSize::new(0), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(6), TextSize::new(13)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(slice(source, tokens[0].range), Some("print"));
+        assert_eq!(slice(source, tokens[1].range), Some(" "));
+        assert_eq!(slice(source, tokens[2].range), Some("printer"));
+    }
+
+    #[test]
+    fn recognizes_number_spellings() {
+        for source in ["0", "123", "001", "0.5", "123.456", "00.50"] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Number,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+            assert_eq!(slice(source, tokens[0].range), Some(source));
+        }
+    }
+
+    #[test]
+    fn numbers_leave_dots_signs_and_names_separate() {
+        for (source, expected) in [
+            (
+                "123.",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Dot, 3, 4)],
+            ),
+            (
+                ".5",
+                vec![(SyntaxKind::Dot, 0, 1), (SyntaxKind::Number, 1, 2)],
+            ),
+            (
+                "-12",
+                vec![(SyntaxKind::Minus, 0, 1), (SyntaxKind::Number, 1, 3)],
+            ),
+            (
+                "+3.5",
+                vec![(SyntaxKind::Plus, 0, 1), (SyntaxKind::Number, 1, 4)],
+            ),
+            (
+                "1.2.3",
+                vec![
+                    (SyntaxKind::Number, 0, 3),
+                    (SyntaxKind::Dot, 3, 4),
+                    (SyntaxKind::Number, 4, 5),
+                ],
+            ),
+            (
+                "123abc",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Identifier, 3, 6)],
+            ),
+            ("a2", vec![(SyntaxKind::Identifier, 0, 2)]),
+        ] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(tokens.len(), expected.len(), "{source}");
+            for (token, (kind, start, end)) in tokens.iter().zip(expected) {
+                assert_eq!(token.kind, kind, "{source}");
+                assert_eq!(
+                    token.range,
+                    checked_range(
+                        checked_size(start).expect("representable offset"),
+                        checked_size(end).expect("representable offset")
+                    )
+                    .unwrap(),
+                    "{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn keeps_complete_string_spellings() {
+        for source in [
+            r#""""#,
+            r#""hello""#,
+            r#""// 123 ; print""#,
+            "\"é💥\"",
+            "\"first\nsecond\"",
+            r#""\n""#,
+        ] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+            assert_eq!(slice(source, tokens[0].range), Some(source));
+        }
+    }
+
+    #[test]
+    fn strings_stop_at_the_next_quote() {
+        let source = r#""a""b";"#;
+        let tokens = scan(source).expect("small test source");
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(3), TextSize::new(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Semicolon,
+                    range: checked_range(TextSize::new(6), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(slice(source, tokens[0].range), Some(r#""a""#));
+        assert_eq!(slice(source, tokens[1].range), Some(r#""b""#));
+    }
+
+    #[test]
+    fn backslash_does_not_escape_a_quote() {
+        let source = r#""\"name"#;
+        assert_eq!(
+            scan(source).expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(3), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn unterminated_strings_cover_the_remaining_source() {
+        for source in ["\"", "\"é", "\"first\n// still inside"] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+            assert_eq!(slice(source, tokens[0].range), Some(source));
+        }
+
+        assert_eq!(
+            scan(r#""ok""é"#).expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(0), TextSize::new(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(4), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn kind_conversion_accepts_only_declared_kinds() {
+        for &kind in SyntaxKind::ALL {
+            assert_eq!(SyntaxKind::from_raw(kind.into_raw()), Some(kind));
+        }
+        assert_eq!(SyntaxKind::from_raw(rowan::SyntaxKind(u16::MAX)), None);
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/src/cst.rs</summary>
+
+```rust title="rlox/crates/syntax/src/cst.rs · complete resulting file"
+use rlox_text::{SourceTooLarge, checked_range, checked_size, slice};
+use rowan::GreenNodeBuilder;
+
+use crate::parser::ParseError;
+use crate::tree::SyntaxNode;
+use crate::{SyntaxKind, Token, scan};
+
+const MAX_NESTING: usize = 64;
+
+#[derive(Debug)]
+pub struct Parse {
+    pub root: SyntaxNode,
+    pub errors: Vec<ParseError>,
+}
+
+pub fn parse(source: &str) -> Result<Parse, SourceTooLarge> {
+    let mut parser = Parser::new(source)?;
+    parser.builder.start_node(SyntaxKind::Root.into_raw());
+    let mut errors = Vec::new();
+    match parser.expression(0) {
+        Err(error) => errors.push(error),
+        Ok(()) => {
+            parser.eat_trivia();
+            if parser.peek().is_some() {
+                errors.push(parser.error("expected end of input"));
+            }
+        }
+    }
+
+    while parser.current < parser.tokens.len() {
+        parser.bump();
+    }
+    parser.builder.finish_node();
+    let root = SyntaxNode::new_root(parser.builder.finish());
+    Ok(Parse { root, errors })
+}
+
+struct Parser<'src> {
+    source: &'src str,
+    tokens: Vec<Token>,
+    current: usize,
+    builder: GreenNodeBuilder<'static>,
+}
+
+impl<'src> Parser<'src> {
+    fn new(source: &'src str) -> Result<Self, SourceTooLarge> {
+        Ok(Self {
+            source,
+            tokens: scan(source)?,
+            current: 0,
+            builder: GreenNodeBuilder::new(),
+        })
+    }
+
+    fn peek(&self) -> Option<Token> {
+        self.tokens.get(self.current).copied()
+    }
+
+    fn bump(&mut self) {
+        let token = self.tokens[self.current];
+        let spelling = slice(self.source, token.range).expect("scanner ranges are valid");
+        self.builder.token(token.kind.into_raw(), spelling);
+        self.current += 1;
+    }
+
+    fn eat_trivia(&mut self) {
+        while let Some(token) = self.peek() {
+            if !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::LineComment) {
+                break;
+            }
+            self.bump();
+        }
+    }
+
+    fn error(&self, message: &str) -> ParseError {
+        match self.peek() {
+            Some(token) => ParseError {
+                message: if token.kind == SyntaxKind::Error {
+                    "invalid token".to_owned()
+                } else {
+                    message.to_owned()
+                },
+                range: token.range,
+            },
+            None => {
+                let end = checked_size(self.source.len()).expect("validated source length");
+                ParseError {
+                    message: message.to_owned(),
+                    range: checked_range(end, end).expect("ordered EOF range"),
+                }
+            }
+        }
+    }
+
+    fn expression(&mut self, nesting: usize) -> Result<(), ParseError> {
+        self.eat_trivia();
+        match self.peek() {
+            Some(token) if token.kind == SyntaxKind::Number => {
+                self.builder.start_node(SyntaxKind::NumberExpr.into_raw());
+                self.bump();
+                self.builder.finish_node();
+                Ok(())
+            }
+            Some(token) if token.kind == SyntaxKind::LeftParen => self.group(nesting),
+            _ => Err(self.error("expected an expression")),
+        }
+    }
+
+    fn group(&mut self, nesting: usize) -> Result<(), ParseError> {
+        if nesting >= MAX_NESTING {
+            return Err(self.error("expression nesting limit exceeded"));
+        }
+        self.builder.start_node(SyntaxKind::GroupingExpr.into_raw());
+        self.bump();
+        let result = match self.expression(nesting + 1) {
+            Err(error) => Err(error),
+            Ok(()) => {
+                self.eat_trivia();
+                match self.peek() {
+                    Some(token) if token.kind == SyntaxKind::RightParen => {
+                        self.bump();
+                        Ok(())
+                    }
+                    _ => Err(self.error("expected ')'")),
+                }
+            }
+        };
+        self.builder.finish_node();
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_NESTING, parse};
+    use crate::SyntaxKind;
+
+    #[test]
+    fn groups_numbers_and_owns_trivia_at_the_container() {
+        let source = " ( 001.50 ) ";
+        let parsed = parse(source).expect("small source");
+        assert!(parsed.errors.is_empty());
+        assert_eq!(parsed.root.to_string(), source);
+        let group = parsed.root.first_child().expect("group");
+        assert_eq!(group.kind(), SyntaxKind::GroupingExpr);
+        assert_eq!(usize::from(group.text_range().start()), 1);
+        assert_eq!(usize::from(group.text_range().end()), 11);
+        assert_eq!(group.to_string(), "( 001.50 )");
+        let number = group.first_child().expect("number");
+        assert_eq!(number.kind(), SyntaxKind::NumberExpr);
+        assert_eq!(number.parent(), Some(group.clone()));
+        assert_eq!(number.to_string(), "001.50");
+        assert_eq!(usize::from(number.text_range().start()), 3);
+        assert_eq!(usize::from(number.text_range().end()), 9);
+        let kinds: Vec<_> = group
+            .children_with_tokens()
+            .map(|child| child.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SyntaxKind::LeftParen,
+                SyntaxKind::Whitespace,
+                SyntaxKind::NumberExpr,
+                SyntaxKind::Whitespace,
+                SyntaxKind::RightParen
+            ]
+        );
+        assert_eq!(parsed.root.children_with_tokens().count(), 3);
+    }
+
+    #[test]
+    fn preserves_source_for_success_and_first_failure() {
+        for source in [
+            "",
+            " // é\n",
+            "001.50",
+            "((12.5))",
+            " // é\n(12.5 // end",
+            "()",
+            "(1 @)",
+            "é",
+            "1 2",
+            "1 + 2",
+            "((1) extra)",
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.root.kind(), SyntaxKind::Root);
+            assert_eq!(parsed.root.to_string(), source);
+            assert_eq!(usize::from(parsed.root.text_range().start()), 0);
+            assert_eq!(usize::from(parsed.root.text_range().end()), source.len());
+            assert!(parsed.errors.len() <= 1);
+        }
+        for source in ["001.50", "((12.5))", " // é\n(12.5) // end"] {
+            assert!(parse(source).expect("small source").errors.is_empty());
+        }
+    }
+
+    #[test]
+    fn reports_located_errors_and_retains_the_suffix() {
+        for (source, message, start, end) in [
+            ("", "expected an expression", 0, 0),
+            (" // é\n", "expected an expression", 7, 7),
+            ("(12.5", "expected ')'", 5, 5),
+            ("()", "expected an expression", 1, 2),
+            ("(1 @)", "invalid token", 3, 4),
+            ("é", "invalid token", 0, 2),
+            ("1 2", "expected end of input", 2, 3),
+            ("1 + 2", "expected end of input", 2, 3),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.errors.len(), 1, "{source:?}");
+            let error = &parsed.errors[0];
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
+            assert_eq!(parsed.root.to_string(), source);
+        }
+        let missing = parse("(12.5").expect("small source");
+        assert_eq!(
+            missing
+                .root
+                .first_child()
+                .expect("partial group")
+                .to_string(),
+            "(12.5"
+        );
+        let invalid = parse("(1 @)").expect("small source");
+        assert_eq!(
+            invalid
+                .root
+                .first_child()
+                .expect("partial group")
+                .to_string(),
+            "(1 "
+        );
+        let suffix: Vec<_> = invalid
+            .root
+            .children_with_tokens()
+            .skip(1)
+            .map(|element| (element.kind(), element.to_string()))
+            .collect();
+        assert_eq!(
+            suffix,
+            vec![
+                (SyntaxKind::Error, "@".to_owned()),
+                (SyntaxKind::RightParen, ")".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn bounds_group_nesting_without_discarding_source() {
+        let source = format!("{}1{}", "(".repeat(MAX_NESTING), ")".repeat(MAX_NESTING));
+        let parsed = parse(&source).expect("small source");
+        assert!(parsed.errors.is_empty());
+        assert_eq!(parsed.root.to_string(), source);
+        let too_deep = format!("({source})");
+        let parsed = parse(&too_deep).expect("small source");
+        assert_eq!(parsed.errors.len(), 1);
+        assert_eq!(
+            parsed.errors[0].message,
+            "expression nesting limit exceeded"
+        );
+        assert_eq!(usize::from(parsed.errors[0].range.start()), MAX_NESTING);
+        assert_eq!(usize::from(parsed.errors[0].range.end()), MAX_NESTING + 1);
+        assert_eq!(parsed.root.to_string(), too_deep);
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/examples/parse_cst.rs</summary>
+
+```rust title="rlox/crates/syntax/examples/parse_cst.rs · complete resulting file"
+use rlox_syntax::cst::parse;
+
+fn main() {
+    for source in [" ( 001.50 ) ", "(12.5", "(1 @)", "1 + 2"] {
+        match parse(source) {
+            Ok(parsed) => {
+                println!("source: {source:?}");
+                for child in parsed.root.children_with_tokens() {
+                    println!(
+                        "  {:?} [{}..{}) {:?}",
+                        child.kind(),
+                        usize::from(child.text_range().start()),
+                        usize::from(child.text_range().end()),
+                        child.to_string()
+                    );
+                }
+                for error in parsed.errors {
+                    println!(
+                        "error: {} [{}..{})",
+                        error.message,
+                        usize::from(error.range.start()),
+                        usize::from(error.range.end())
+                    );
+                }
+                println!("reconstructed: {:?}", parsed.root.to_string());
+            }
+            Err(error) => eprintln!("{error}"),
+        }
+    }
+}
+```
+
+</details>

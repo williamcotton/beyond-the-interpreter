@@ -1,3 +1,4 @@
+pub mod cst;
 pub mod expr;
 pub mod parser;
 pub mod tree;
@@ -116,6 +117,7 @@ syntax_kinds! {
     Error,
     Root,
     NumberExpr,
+    GroupingExpr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
