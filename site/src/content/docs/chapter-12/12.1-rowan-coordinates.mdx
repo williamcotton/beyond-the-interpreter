@@ -1,0 +1,3169 @@
+---
+title: 12.1 — Use Rowan-compatible text coordinates
+slug: chapter-12/12.1-rowan-coordinates
+description: Share Rowan's byte-coordinate types, check source capacity, and preserve existing parser and CLI behavior through the migration.
+prev:
+  link: /chapter-11/11.5-parse-terms/
+  label: 11.5 · Put addition around multiplication
+next: false
+---
+
+<p className="book-subtitle">Chapter 12 · Building Lossless Trees with Rowan</p>
+
+Our arithmetic parser can build expression trees, but those trees leave
+source details behind. We'll introduce Rowan to store lossless syntax.
+Before its nodes can share locations with our scanner and errors, the
+pieces need to agree on what a text offset is.
+
+Our `TextSize` currently wraps `usize`. Rowan uses a 32-bit byte measure.
+Both count UTF-8 bytes; they differ in capacity and in their Rust APIs.
+A source length that fits `usize` might not fit the tree's coordinates:
+
+```text title="Check the count before narrowing it"
+source.len(): usize
+       │ checked conversion
+       ├─ 0 through 4,294,967,295 bytes → TextSize
+       └─ larger byte count           → SourceTooLarge, without a range
+```
+
+The letter `é` still occupies two bytes. No offsets turn into character
+indices, UTF-16 units or display columns. This is a representation migration
+with an explicit input boundary, not a change to the arithmetic grammar.
+
+Start from [Section 11.5](/chapter-11/11.5-parse-terms/), in the **Rust
+workspace directory**. The following edits form one cross-crate migration:
+**finish the text, scanner, parser, example and app changes before checking
+compilation**. Complete resulting files are available at the end; required
+test patches are shown with their corresponding caller changes.
+
+## Give coordinates one owner
+
+Add this dependency section to **`rlox/crates/text/Cargo.toml`**:
+
+```toml title="rlox/crates/text/Cargo.toml · append dependencies"
+[dependencies]
+rowan = "=0.17.0"
+```
+
+We pin the direct dependency and let Cargo record its resolved dependencies
+in the workspace lockfile. Rowan [re-exports the coordinate types](https://docs.rs/rowan/0.17.0/rowan/).
+Its underlying [TextSize contract](https://docs.rs/text-size/latest/text_size/struct.TextSize.html)
+provides checked conversion from `usize` and conversion back for string
+indexing. We won't build syntax nodes in this section.
+
+Replace the two custom coordinate structs and their implementations at the
+start of **`rlox/crates/text/src/lib.rs`**, keeping the file identity types,
+with the complete production portion below. The tests will be adjusted
+next.
+
+```rust title="rlox/crates/text/src/lib.rs · production definitions before tests"
+use std::fmt;
+
+pub use rowan::{TextRange, TextSize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceTooLarge;
+
+impl fmt::Display for SourceTooLarge {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("source exceeds the 4,294,967,295-byte size limit")
+    }
+}
+
+pub fn checked_size(bytes: usize) -> Result<TextSize, SourceTooLarge> {
+    TextSize::try_from(bytes).map_err(|_| SourceTooLarge)
+}
+
+pub fn checked_range(start: TextSize, end: TextSize) -> Option<TextRange> {
+    if start > end {
+        return None;
+    }
+    Some(TextRange::new(start, end))
+}
+
+pub fn slice(source: &str, range: TextRange) -> Option<&str> {
+    source.get(usize::from(range.start())..usize::from(range.end()))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyntaxOrigin {
+    pub file: FileId,
+    pub range: TextRange,
+}
+```
+
+`pub use` [re-exports](https://doc.rust-lang.org/book/ch07-04-bringing-paths-into-scope-with-the-use-keyword.html#re-exporting-names-with-pub-use) Rowan's actual types through our existing text package.
+We aren't creating another wrapper that callers must translate into tree
+coordinates later. The standard `TryFrom` conversion in `checked_size`
+rejects a byte count that can't fit; `map_err` gives that failure a name in
+our API.
+
+`SourceTooLarge` is file-level information. There is no representable range
+covering the oversized source, so the error doesn't invent one. Its
+`Display` implementation supplies the message used by `{error}` in a
+terminal or example. The formatter writes that text; it doesn't print on
+its own. See the standard library's
+[Display contract](https://doc.rust-lang.org/std/fmt/trait.Display.html).
+
+There are two other API differences. Rowan's
+[`TextRange::new`](https://docs.rs/text-size/latest/text_size/struct.TextRange.html#method.new)
+returns a range directly and panics if the endpoints are reversed. Our
+`checked_range` keeps the previous checked-construction behavior, returning
+`None` for that case. And Rowan owns these types, so our safe slicing
+convenience becomes the free function `slice(source, range)` rather than
+an inherent `.slice` method. It converts offsets to `usize` and uses
+`str::get`, preserving rejection of out-of-bounds or non-boundary UTF-8
+ranges.
+
+Known small constants can use `TextSize::new(5)`, whose argument is `u32`.
+Measured `usize` values use `checked_size(...)`. A range's byte endpoints
+convert back with `usize::from(range.start())`, instead of accessing a
+public `.0` field. `FileId` remains an identity index; its representation
+hasn't changed.
+
+Apply this **required text-test patch**. It preserves the previous cases
+and adds a capacity test that doesn't allocate a giant source string:
+
+```diff title="rlox/crates/text/src/lib.rs · tests"
+@@ -1,16 +1,18 @@
+
+ mod tests {
+-    use super::{FileId, SyntaxOrigin, TextRange, TextSize};
++    use super::{
++        FileId, SourceTooLarge, SyntaxOrigin, TextSize, checked_range, checked_size, slice,
++    };
+
+     #[test]
+     fn selects_ascii_fragment() {
+-        let word = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
++        let word = checked_range(TextSize::new(0), TextSize::new(5)).expect("ordered range");
+
+-        assert_eq!(word.slice("print 42;"), Some("print"));
++        assert_eq!(slice("print 42;", word), Some("print"));
+     }
+
+     #[test]
+     fn rejects_reversed_range() {
+-        assert_eq!(TextRange::new(TextSize(5), TextSize(0)), None);
++        assert_eq!(checked_range(TextSize::new(5), TextSize::new(0)), None);
+     }
+
+@@ -18,9 +20,9 @@
+     fn respects_utf8_boundaries() {
+         let source = "aé!";
+-        let accent = TextRange::new(TextSize(1), TextSize(3)).expect("ordered range");
+-        let split = TextRange::new(TextSize(1), TextSize(2)).expect("ordered range");
++        let accent = checked_range(TextSize::new(1), TextSize::new(3)).expect("ordered range");
++        let split = checked_range(TextSize::new(1), TextSize::new(2)).expect("ordered range");
+
+-        assert_eq!(accent.slice(source), Some("é"));
+-        assert_eq!(split.slice(source), None);
++        assert_eq!(slice(source, accent), Some("é"));
++        assert_eq!(slice(source, split), None);
+     }
+
+@@ -28,17 +30,17 @@
+     fn checks_bounds_and_empty_ranges() {
+         let source = "aé!";
+-        let end = TextSize(source.len());
+-        let eof = TextRange::new(end, end).expect("ordered range");
+-        let beyond = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+-        let interior = TextRange::new(TextSize(2), TextSize(2)).expect("ordered range");
++        let end = checked_size(source.len()).expect("representable offset");
++        let eof = checked_range(end, end).expect("ordered range");
++        let beyond = checked_range(TextSize::new(0), TextSize::new(5)).expect("ordered range");
++        let interior = checked_range(TextSize::new(2), TextSize::new(2)).expect("ordered range");
+
+-        assert_eq!(eof.slice(source), Some(""));
+-        assert_eq!(beyond.slice(source), None);
+-        assert_eq!(interior.slice(source), None);
++        assert_eq!(slice(source, eof), Some(""));
++        assert_eq!(slice(source, beyond), None);
++        assert_eq!(slice(source, interior), None);
+     }
+
+     #[test]
+     fn same_range_in_different_files_has_different_origins() {
+-        let range = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
++        let range = checked_range(TextSize::new(0), TextSize::new(5)).expect("ordered range");
+         let first = SyntaxOrigin {
+             file: FileId(0),
+@@ -60,5 +62,5 @@
+         let origin = SyntaxOrigin {
+             file: FileId(1),
+-            range: TextRange::new(TextSize(0), TextSize(5)).expect("ordered range"),
++            range: checked_range(TextSize::new(0), TextSize::new(5)).expect("ordered range"),
+         };
+
+@@ -69,5 +71,14 @@
+         };
+
+-        assert_eq!(origin.range.slice(source), Some("while"));
++        assert_eq!(slice(source, origin.range), Some("while"));
++    }
++
++    #[test]
++    fn checks_capacity_without_allocating_source() {
++        let maximum = usize::try_from(u32::MAX).expect("u32 fits this target's usize");
++        assert_eq!(checked_size(maximum), Ok(TextSize::new(u32::MAX)));
++        if let Some(too_large) = maximum.checked_add(1) {
++            assert_eq!(checked_size(too_large), Err(SourceTooLarge));
++        }
+     }
+ }
+```
+
+The boundary test passes integer sizes to the same function the scanner
+will call. On a target whose `usize` cannot represent a larger count,
+`checked_add` returns `None`; it doesn't overflow while constructing the
+test. This checks numeric capacity, without requiring gigabytes of memory.
+
+## Reject an oversized source before lexing
+
+In **`rlox/crates/syntax/src/lib.rs`**, replace the text import:
+
+```diff title="rlox/crates/syntax/src/lib.rs · coordinate and input-error imports"
+-use rlox_text::{TextRange, TextSize};
++use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size};
+```
+
+Replace the existing public `scan` function with:
+
+```rust title="rlox/crates/syntax/src/lib.rs · checked scanner entry point"
+pub fn scan(source: &str) -> Result<Vec<Token>, SourceTooLarge> {
+    checked_size(source.len())?;
+    let mut tokens = Vec::new();
+
+    for (result, span) in SyntaxKind::lexer(source).spanned() {
+        let kind = match result {
+            Ok(kind) => kind,
+            Err(()) => SyntaxKind::Error,
+        };
+        let range = checked_range(
+            checked_size(span.start).expect("validated source length"),
+            checked_size(span.end).expect("validated source length"),
+        )
+        .expect("Logos spans are ordered");
+
+        tokens.push(Token { kind, range });
+    }
+
+    Ok(tokens)
+}
+```
+
+`scan` now returns `Result<Vec<Token>, SourceTooLarge>`. Its first operation
+checks the full byte length. Once that succeeds, each lexer span is within
+the validated source, so the later conversions enforce an internal
+invariant. No narrowing cast silently truncates an offset.
+
+A lexical error is still an ordinary `Error` token in `Ok(tokens)`. This
+new `Err` means the source can't be represented at all. Keeping those two
+cases separate preserves the token inspector's complete listing of
+representable malformed source.
+
+In the existing scanner tests, every input is small, so each `scan(...)`
+call now checks `expect("small test source")` before inspecting its vector.
+The token expectations stay the same; their constructors, slices and
+endpoint conversions use the new text API. Apply the full required patch:
+
+<details>
+<summary>Required scanner-test migration · all existing cases retained</summary>
+
+```diff title="rlox/crates/syntax/src/lib.rs · tests"
+@@ -2,9 +2,9 @@
+ mod tests {
+     use super::{SyntaxKind, Token, scan};
+-    use rlox_text::{TextRange, TextSize};
++    use rlox_text::{TextSize, checked_range, checked_size, slice};
+
+     #[test]
+     fn scans_single_character_tokens() {
+-        let tokens = scan("()=!");
++        let tokens = scan("()=!").expect("small test source");
+
+         assert_eq!(
+@@ -13,17 +13,17 @@
+                 Token {
+                     kind: SyntaxKind::LeftParen,
+-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::RightParen,
+-                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
++                    range: checked_range(TextSize::new(1), TextSize::new(2)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::Equal,
+-                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
++                    range: checked_range(TextSize::new(2), TextSize::new(3)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::Bang,
+-                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
++                    range: checked_range(TextSize::new(3), TextSize::new(4)).unwrap(),
+                 },
+             ]
+@@ -33,5 +33,5 @@
+     #[test]
+     fn empty_source_has_no_tokens() {
+-        assert!(scan("").is_empty());
++        assert!(scan("").expect("small test source").is_empty());
+     }
+
+@@ -39,11 +39,11 @@
+     fn consumes_a_whole_unsupported_character() {
+         let source = "é!";
+-        let tokens = scan(source);
++        let tokens = scan(source).expect("small test source");
+
+         assert_eq!(tokens.len(), 2);
+         assert_eq!(tokens[0].kind, SyntaxKind::Error);
+-        assert_eq!(tokens[0].range.slice(source), Some("é"));
++        assert_eq!(slice(source, tokens[0].range), Some("é"));
+         assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+-        assert_eq!(tokens[1].range.slice(source), Some("!"));
++        assert_eq!(slice(source, tokens[1].range), Some("!"));
+     }
+
+@@ -51,13 +51,13 @@
+     fn scans_adjacent_paired_operators() {
+         assert_eq!(
+-            scan("!==="),
++            scan("!===").expect("small test source"),
+             vec![
+                 Token {
+                     kind: SyntaxKind::BangEqual,
+-                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::EqualEqual,
+-                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
++                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                 },
+             ]
+@@ -68,17 +68,17 @@
+     fn failed_lookahead_preserves_the_next_character() {
+         assert_eq!(
+-            scan("!é("),
++            scan("!é(").expect("small test source"),
+             vec![
+                 Token {
+                     kind: SyntaxKind::Bang,
+-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Error,
+-                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Error,
++                    range: checked_range(TextSize::new(1), TextSize::new(3)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::LeftParen,
+-                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
++                    range: checked_range(TextSize::new(3), TextSize::new(4)).unwrap(),
+                 },
+             ]
+@@ -90,8 +90,8 @@
+         for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+             assert_eq!(
+-                scan(source),
++                scan(source).expect("small test source"),
+                 vec![Token {
+                     kind,
+-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                 }]
+             );
+@@ -102,17 +102,17 @@
+     fn identifiers_stop_before_operators() {
+         assert_eq!(
+-            scan("a_2!=other"),
+-            vec![
+-                Token {
+-                    kind: SyntaxKind::Identifier,
+-                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
++            scan("a_2!=other").expect("small test source"),
++            vec![
++                Token {
++                    kind: SyntaxKind::Identifier,
++                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::BangEqual,
+-                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Identifier,
+-                    range: TextRange::new(TextSize(5), TextSize(10)).unwrap(),
++                    range: checked_range(TextSize::new(3), TextSize::new(5)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Identifier,
++                    range: checked_range(TextSize::new(5), TextSize::new(10)).unwrap(),
+                 },
+             ]
+@@ -124,8 +124,12 @@
+         for source in ["_", "A9", "printer"] {
+             assert_eq!(
+-                scan(source),
+-                vec![Token {
+-                    kind: SyntaxKind::Identifier,
+-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
++                scan(source).expect("small test source"),
++                vec![Token {
++                    kind: SyntaxKind::Identifier,
++                    range: checked_range(
++                        TextSize::new(0),
++                        checked_size(source.len()).expect("representable offset")
++                    )
++                    .unwrap(),
+                 }]
+             );
+@@ -136,21 +140,21 @@
+     fn number_and_name_boundaries_preserve_unknown_characters() {
+         assert_eq!(
+-            scan("2aé_b"),
++            scan("2aé_b").expect("small test source"),
+             vec![
+                 Token {
+                     kind: SyntaxKind::Number,
+-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Identifier,
+-                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Error,
+-                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Identifier,
+-                    range: TextRange::new(TextSize(4), TextSize(6)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Identifier,
++                    range: checked_range(TextSize::new(1), TextSize::new(2)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Error,
++                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Identifier,
++                    range: checked_range(TextSize::new(4), TextSize::new(6)).unwrap(),
+                 },
+             ]
+@@ -161,25 +165,25 @@
+     fn keeps_whitespace_between_tokens() {
+         assert_eq!(
+-            scan("a \t\r\n!= b"),
+-            vec![
+-                Token {
+-                    kind: SyntaxKind::Identifier,
+-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
++            scan("a \t\r\n!= b").expect("small test source"),
++            vec![
++                Token {
++                    kind: SyntaxKind::Identifier,
++                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::Whitespace,
+-                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
++                    range: checked_range(TextSize::new(1), TextSize::new(5)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::BangEqual,
+-                    range: TextRange::new(TextSize(5), TextSize(7)).unwrap(),
++                    range: checked_range(TextSize::new(5), TextSize::new(7)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::Whitespace,
+-                    range: TextRange::new(TextSize(7), TextSize(8)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Identifier,
+-                    range: TextRange::new(TextSize(8), TextSize(9)).unwrap(),
++                    range: checked_range(TextSize::new(7), TextSize::new(8)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Identifier,
++                    range: checked_range(TextSize::new(8), TextSize::new(9)).unwrap(),
+                 },
+             ]
+@@ -191,8 +195,12 @@
+         for source in ["\u{000b}", "\u{000c}", "\u{00a0}"] {
+             assert_eq!(
+-                scan(source),
+-                vec![Token {
+-                    kind: SyntaxKind::Error,
+-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
++                scan(source).expect("small test source"),
++                vec![Token {
++                    kind: SyntaxKind::Error,
++                    range: checked_range(
++                        TextSize::new(0),
++                        checked_size(source.len()).expect("representable offset")
++                    )
++                    .unwrap(),
+                 }]
+             );
+@@ -242,9 +250,13 @@
+             let mut reconstructed = String::new();
+
+-            for token in scan(source) {
+-                let text = token.range.slice(source).expect("valid UTF-8 source slice");
++            for token in scan(source).expect("small test source") {
++                let text = slice(source, token.range).expect("valid UTF-8 source slice");
+                 assert!(!text.is_empty());
+                 let end = offset + text.len();
+-                let expected = TextRange::new(TextSize(offset), TextSize(end)).unwrap();
++                let expected = checked_range(
++                    checked_size(offset).expect("representable offset"),
++                    checked_size(end).expect("representable offset"),
++                )
++                .unwrap();
+                 assert_eq!(token.range, expected);
+
+@@ -261,20 +273,20 @@
+     fn recognizes_single_slashes() {
+         assert_eq!(
+-            scan("/"),
++            scan("/").expect("small test source"),
+             vec![Token {
+                 kind: SyntaxKind::Slash,
+-                range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
++                range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+             }]
+         );
+         assert_eq!(
+-            scan("/name"),
++            scan("/name").expect("small test source"),
+             vec![
+                 Token {
+                     kind: SyntaxKind::Slash,
+-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Identifier,
+-                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Identifier,
++                    range: checked_range(TextSize::new(1), TextSize::new(5)).unwrap(),
+                 },
+             ]
+@@ -285,17 +297,17 @@
+     fn line_comments_leave_the_line_feed_unread() {
+         assert_eq!(
+-            scan("//é\r\nname"),
++            scan("//é\r\nname").expect("small test source"),
+             vec![
+                 Token {
+                     kind: SyntaxKind::LineComment,
+-                    range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(5)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::Whitespace,
+-                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Identifier,
+-                    range: TextRange::new(TextSize(6), TextSize(10)).unwrap(),
++                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Identifier,
++                    range: checked_range(TextSize::new(6), TextSize::new(10)).unwrap(),
+                 },
+             ]
+@@ -307,8 +319,12 @@
+         for source in ["//", "//é", "///"] {
+             assert_eq!(
+-                scan(source),
++                scan(source).expect("small test source"),
+                 vec![Token {
+                     kind: SyntaxKind::LineComment,
+-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
++                    range: checked_range(
++                        TextSize::new(0),
++                        checked_size(source.len()).expect("representable offset")
++                    )
++                    .unwrap(),
+                 }]
+             );
+@@ -319,17 +335,17 @@
+     fn unknown_characters_remain_separate_tokens() {
+         assert_eq!(
+-            scan("@é💥"),
+-            vec![
+-                Token {
+-                    kind: SyntaxKind::Error,
+-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Error,
+-                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Error,
+-                    range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
++            scan("@é💥").expect("small test source"),
++            vec![
++                Token {
++                    kind: SyntaxKind::Error,
++                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Error,
++                    range: checked_range(TextSize::new(1), TextSize::new(3)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Error,
++                    range: checked_range(TextSize::new(3), TextSize::new(7)).unwrap(),
+                 },
+             ]
+@@ -352,8 +368,8 @@
+         ] {
+             assert_eq!(
+-                scan(source),
++                scan(source).expect("small test source"),
+                 vec![Token {
+                     kind,
+-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                 }]
+             );
+@@ -364,21 +380,21 @@
+     fn recognizes_adjacent_comparison_operators() {
+         assert_eq!(
+-            scan("<=>=<>"),
++            scan("<=>=<>").expect("small test source"),
+             vec![
+                 Token {
+                     kind: SyntaxKind::LessEqual,
+-                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::GreaterEqual,
+-                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
++                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::Less,
+-                    range: TextRange::new(TextSize(4), TextSize(5)).unwrap(),
++                    range: checked_range(TextSize::new(4), TextSize::new(5)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::Greater,
+-                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
++                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                 },
+             ]
+@@ -389,21 +405,21 @@
+     fn comparison_pairs_leave_extra_equals_tokens() {
+         assert_eq!(
+-            scan("<==>=="),
++            scan("<==>==").expect("small test source"),
+             vec![
+                 Token {
+                     kind: SyntaxKind::LessEqual,
+-                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::Equal,
+-                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
++                    range: checked_range(TextSize::new(2), TextSize::new(3)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::GreaterEqual,
+-                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
++                    range: checked_range(TextSize::new(3), TextSize::new(5)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::Equal,
+-                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
++                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                 },
+             ]
+@@ -432,8 +448,12 @@
+         ] {
+             assert_eq!(
+-                scan(source),
++                scan(source).expect("small test source"),
+                 vec![Token {
+                     kind,
+-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
++                    range: checked_range(
++                        TextSize::new(0),
++                        checked_size(source.len()).expect("representable offset")
++                    )
++                    .unwrap(),
+                 }]
+             );
+@@ -452,8 +472,12 @@
+         ] {
+             assert_eq!(
+-                scan(source),
+-                vec![Token {
+-                    kind: SyntaxKind::Identifier,
+-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
++                scan(source).expect("small test source"),
++                vec![Token {
++                    kind: SyntaxKind::Identifier,
++                    range: checked_range(
++                        TextSize::new(0),
++                        checked_size(source.len()).expect("representable offset")
++                    )
++                    .unwrap(),
+                 }]
+             );
+@@ -464,5 +488,5 @@
+     fn token_spelling_comes_from_the_source() {
+         let source = "print printer";
+-        let tokens = scan(source);
++        let tokens = scan(source).expect("small test source");
+
+         assert_eq!(
+@@ -471,19 +495,19 @@
+                 Token {
+                     kind: SyntaxKind::Print,
+-                    range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(5)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::Whitespace,
+-                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Identifier,
+-                    range: TextRange::new(TextSize(6), TextSize(13)).unwrap(),
+-                },
+-            ]
+-        );
+-        assert_eq!(tokens[0].range.slice(source), Some("print"));
+-        assert_eq!(tokens[1].range.slice(source), Some(" "));
+-        assert_eq!(tokens[2].range.slice(source), Some("printer"));
++                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Identifier,
++                    range: checked_range(TextSize::new(6), TextSize::new(13)).unwrap(),
++                },
++            ]
++        );
++        assert_eq!(slice(source, tokens[0].range), Some("print"));
++        assert_eq!(slice(source, tokens[1].range), Some(" "));
++        assert_eq!(slice(source, tokens[2].range), Some("printer"));
+     }
+
+@@ -491,13 +515,17 @@
+     fn recognizes_number_spellings() {
+         for source in ["0", "123", "001", "0.5", "123.456", "00.50"] {
+-            let tokens = scan(source);
++            let tokens = scan(source).expect("small test source");
+             assert_eq!(
+                 tokens,
+                 vec![Token {
+                     kind: SyntaxKind::Number,
+-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+-                }]
+-            );
+-            assert_eq!(tokens[0].range.slice(source), Some(source));
++                    range: checked_range(
++                        TextSize::new(0),
++                        checked_size(source.len()).expect("representable offset")
++                    )
++                    .unwrap(),
++                }]
++            );
++            assert_eq!(slice(source, tokens[0].range), Some(source));
+         }
+     }
+@@ -536,5 +564,5 @@
+             ("a2", vec![(SyntaxKind::Identifier, 0, 2)]),
+         ] {
+-            let tokens = scan(source);
++            let tokens = scan(source).expect("small test source");
+             assert_eq!(tokens.len(), expected.len(), "{source}");
+             for (token, (kind, start, end)) in tokens.iter().zip(expected) {
+@@ -542,5 +570,9 @@
+                 assert_eq!(
+                     token.range,
+-                    TextRange::new(TextSize(start), TextSize(end)).unwrap(),
++                    checked_range(
++                        checked_size(start).expect("representable offset"),
++                        checked_size(end).expect("representable offset")
++                    )
++                    .unwrap(),
+                     "{source}"
+                 );
+@@ -559,13 +591,17 @@
+             r#""\n""#,
+         ] {
+-            let tokens = scan(source);
++            let tokens = scan(source).expect("small test source");
+             assert_eq!(
+                 tokens,
+                 vec![Token {
+                     kind: SyntaxKind::String,
+-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+-                }]
+-            );
+-            assert_eq!(tokens[0].range.slice(source), Some(source));
++                    range: checked_range(
++                        TextSize::new(0),
++                        checked_size(source.len()).expect("representable offset")
++                    )
++                    .unwrap(),
++                }]
++            );
++            assert_eq!(slice(source, tokens[0].range), Some(source));
+         }
+     }
+@@ -574,5 +610,5 @@
+     fn strings_stop_at_the_next_quote() {
+         let source = r#""a""b";"#;
+-        let tokens = scan(source);
++        let tokens = scan(source).expect("small test source");
+         assert_eq!(
+             tokens,
+@@ -580,18 +616,18 @@
+                 Token {
+                     kind: SyntaxKind::String,
+-                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::String,
+-                    range: TextRange::new(TextSize(3), TextSize(6)).unwrap(),
++                    range: checked_range(TextSize::new(3), TextSize::new(6)).unwrap(),
+                 },
+                 Token {
+                     kind: SyntaxKind::Semicolon,
+-                    range: TextRange::new(TextSize(6), TextSize(7)).unwrap(),
+-                },
+-            ]
+-        );
+-        assert_eq!(tokens[0].range.slice(source), Some(r#""a""#));
+-        assert_eq!(tokens[1].range.slice(source), Some(r#""b""#));
++                    range: checked_range(TextSize::new(6), TextSize::new(7)).unwrap(),
++                },
++            ]
++        );
++        assert_eq!(slice(source, tokens[0].range), Some(r#""a""#));
++        assert_eq!(slice(source, tokens[1].range), Some(r#""b""#));
+     }
+
+@@ -600,13 +636,13 @@
+         let source = r#""\"name"#;
+         assert_eq!(
+-            scan(source),
++            scan(source).expect("small test source"),
+             vec![
+                 Token {
+                     kind: SyntaxKind::String,
+-                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Identifier,
+-                    range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Identifier,
++                    range: checked_range(TextSize::new(3), TextSize::new(7)).unwrap(),
+                 },
+             ]
+@@ -617,25 +653,29 @@
+     fn unterminated_strings_cover_the_remaining_source() {
+         for source in ["\"", "\"é", "\"first\n// still inside"] {
+-            let tokens = scan(source);
++            let tokens = scan(source).expect("small test source");
+             assert_eq!(
+                 tokens,
+                 vec![Token {
+                     kind: SyntaxKind::Error,
+-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+-                }]
+-            );
+-            assert_eq!(tokens[0].range.slice(source), Some(source));
+-        }
+-
+-        assert_eq!(
+-            scan(r#""ok""é"#),
++                    range: checked_range(
++                        TextSize::new(0),
++                        checked_size(source.len()).expect("representable offset")
++                    )
++                    .unwrap(),
++                }]
++            );
++            assert_eq!(slice(source, tokens[0].range), Some(source));
++        }
++
++        assert_eq!(
++            scan(r#""ok""é"#).expect("small test source"),
+             vec![
+                 Token {
+                     kind: SyntaxKind::String,
+-                    range: TextRange::new(TextSize(0), TextSize(4)).unwrap(),
+-                },
+-                Token {
+-                    kind: SyntaxKind::Error,
+-                    range: TextRange::new(TextSize(4), TextSize(7)).unwrap(),
++                    range: checked_range(TextSize::new(0), TextSize::new(4)).unwrap(),
++                },
++                Token {
++                    kind: SyntaxKind::Error,
++                    range: checked_range(TextSize::new(4), TextSize::new(7)).unwrap(),
+                 },
+             ]
+```
+
+</details>
+
+## Separate input failure from a syntax error
+
+Our existing `ParseError` still describes a located syntax problem. Keep
+that struct and its fields. A source-capacity failure needs a different
+case at the public entry point, before grammar rules run.
+
+In **`rlox/crates/syntax/src/parser.rs`**, change the text import:
+
+```diff title="rlox/crates/syntax/src/parser.rs · text helpers"
+-use rlox_text::{TextRange, TextSize};
++use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size, slice};
+```
+
+Insert this enum **after `ParseError` and before `error_at`**:
+
+```rust title="rlox/crates/syntax/src/parser.rs · public failure categories"
+#[derive(Debug)]
+pub enum ParseFailure {
+    SourceTooLarge(SourceTooLarge),
+    Syntax(ParseError),
+}
+```
+
+Grammar methods keep returning `Result<Expr, ParseError>`. Replace only the
+public `parse` function with this boundary adapter:
+
+```rust title="rlox/crates/syntax/src/parser.rs · replace public parse"
+pub fn parse(source: &str) -> Result<Expr, ParseFailure> {
+    let mut parser = Parser::new(source).map_err(ParseFailure::SourceTooLarge)?;
+    let expr = parser.expression(0).map_err(ParseFailure::Syntax)?;
+    if parser.peek().is_some() {
+        return Err(ParseFailure::Syntax(parser.error("expected end of input")));
+    }
+    Ok(expr)
+}
+```
+
+The two `map_err` calls label the stage that failed. An enum variant's
+constructor can serve as the conversion function. An input failure carries
+no syntax range; a syntax failure carries the existing message and range.
+The full-input check still rejects leftover tokens.
+
+Change the private `Parser::new` method to return the scanner's failure
+instead of assuming a token vector:
+
+```rust title="rlox/crates/syntax/src/parser.rs · replace constructor"
+    fn new(source: &'src str) -> Result<Self, SourceTooLarge> {
+        let mut tokens = scan(source)?;
+        tokens.retain(|token| {
+            !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::LineComment)
+        });
+        Ok(Self {
+            source,
+            tokens,
+            current: 0,
+        })
+    }
+```
+
+All grammar decisions and tree construction stay unchanged. Two text-API
+edits remain in the production methods. In `number`, replace its spelling
+lookup with:
+
+```rust title="rlox/crates/syntax/src/parser.rs · number spelling lookup"
+        let spelling = slice(self.source, token.range).expect("scanner ranges are valid");
+```
+
+In the EOF branch of `error`, use:
+
+```rust title="rlox/crates/syntax/src/parser.rs · EOF location"
+                let end = checked_size(self.source.len()).expect("validated source length");
+                ParseError {
+                    message: message.to_owned(),
+                    range: checked_range(end, end).expect("ordered EOF range"),
+                }
+```
+
+Those endpoints remain valid because `new` accepted the source before any
+grammar method could run. The free `error_at` function still uses the
+token's already-checked range.
+
+Our syntax tests now need to distinguish the two public failure variants.
+A small test helper extracts the located error expected by these small
+inputs; the assertions keep checking the original messages and byte
+positions. Apply this required patch, including the helper and numeric
+endpoint conversions:
+
+<details>
+<summary>Required parser-test migration · grammar cases and expectations retained</summary>
+
+```diff title="rlox/crates/syntax/src/parser.rs · tests"
+@@ -1,5 +1,12 @@
+
+ mod tests {
+-    use super::{MAX_NESTING, parse};
++    use super::{MAX_NESTING, ParseError, ParseFailure, parse};
++
++    fn syntax_error(source: &str) -> ParseError {
++        match parse(source) {
++            Err(ParseFailure::Syntax(error)) => error,
++            other => panic!("expected a syntax error, got {other:?}"),
++        }
++    }
+
+     #[test]
+@@ -19,8 +26,8 @@
+     fn missing_expression_points_to_source_end() {
+         for source in ["", " \t\n", " // é\n"] {
+-            let error = parse(source).unwrap_err();
++            let error = syntax_error(source);
+             assert_eq!(error.message, "expected an expression");
+-            assert_eq!(error.range.start().0, source.len());
+-            assert_eq!(error.range.end().0, source.len());
++            assert_eq!(usize::from(error.range.start()), source.len());
++            assert_eq!(usize::from(error.range.end()), source.len());
+         }
+     }
+@@ -28,16 +35,16 @@
+     #[test]
+     fn rejects_a_second_number() {
+-        let error = parse("123 456").unwrap_err();
++        let error = syntax_error("123 456");
+         assert_eq!(error.message, "expected end of input");
+-        assert_eq!(error.range.start().0, 4);
+-        assert_eq!(error.range.end().0, 7);
++        assert_eq!(usize::from(error.range.start()), 4);
++        assert_eq!(usize::from(error.range.end()), 7);
+     }
+
+     #[test]
+     fn rejects_an_unexpected_token_kind() {
+-        let error = parse("hello").unwrap_err();
++        let error = syntax_error("hello");
+         assert_eq!(error.message, "expected an expression");
+-        assert_eq!(error.range.start().0, 0);
+-        assert_eq!(error.range.end().0, 5);
++        assert_eq!(usize::from(error.range.start()), 0);
++        assert_eq!(usize::from(error.range.end()), 5);
+     }
+
+@@ -45,8 +52,8 @@
+     fn retains_lexical_errors_and_utf8_ranges() {
+         for (source, start, end) in [("é", 0, 2), ("123 é", 4, 6)] {
+-            let error = parse(source).unwrap_err();
++            let error = syntax_error(source);
+             assert_eq!(error.message, "invalid token");
+-            assert_eq!(error.range.start().0, start);
+-            assert_eq!(error.range.end().0, end);
++            assert_eq!(usize::from(error.range.start()), start);
++            assert_eq!(usize::from(error.range.end()), end);
+         }
+     }
+@@ -67,8 +74,8 @@
+         for (source, start, end) in [("(123", 4, 4), ("(123 456)", 5, 8), ("(123 // é\n", 11, 11)]
+         {
+-            let error = parse(source).unwrap_err();
++            let error = syntax_error(source);
+             assert_eq!(error.message, "expected ')'");
+-            assert_eq!(error.range.start().0, start);
+-            assert_eq!(error.range.end().0, end);
++            assert_eq!(usize::from(error.range.start()), start);
++            assert_eq!(usize::from(error.range.end()), end);
+         }
+     }
+@@ -76,13 +83,13 @@
+     #[test]
+     fn rejects_empty_groups_and_trailing_closes() {
+-        let empty = parse("()").unwrap_err();
++        let empty = syntax_error("()");
+         assert_eq!(empty.message, "expected an expression");
+-        assert_eq!(empty.range.start().0, 1);
+-        assert_eq!(empty.range.end().0, 2);
+-
+-        let extra = parse("123)").unwrap_err();
++        assert_eq!(usize::from(empty.range.start()), 1);
++        assert_eq!(usize::from(empty.range.end()), 2);
++
++        let extra = syntax_error("123)");
+         assert_eq!(extra.message, "expected end of input");
+-        assert_eq!(extra.range.start().0, 3);
+-        assert_eq!(extra.range.end().0, 4);
++        assert_eq!(usize::from(extra.range.start()), 3);
++        assert_eq!(usize::from(extra.range.end()), 4);
+     }
+
+@@ -90,8 +97,8 @@
+     fn retains_lexical_errors_inside_groups() {
+         for (source, start, end) in [("(é)", 1, 3), ("(123 é)", 5, 7)] {
+-            let error = parse(source).unwrap_err();
++            let error = syntax_error(source);
+             assert_eq!(error.message, "invalid token");
+-            assert_eq!(error.range.start().0, start);
+-            assert_eq!(error.range.end().0, end);
++            assert_eq!(usize::from(error.range.start()), start);
++            assert_eq!(usize::from(error.range.end()), end);
+         }
+     }
+@@ -111,8 +118,8 @@
+
+         let too_deep = format!("({at_limit})");
+-        let error = parse(&too_deep).unwrap_err();
+-        assert_eq!(error.message, "expression nesting limit exceeded");
+-        assert_eq!(error.range.start().0, MAX_NESTING);
+-        assert_eq!(error.range.end().0, MAX_NESTING + 1);
++        let error = syntax_error(&too_deep);
++        assert_eq!(error.message, "expression nesting limit exceeded");
++        assert_eq!(usize::from(error.range.start()), MAX_NESTING);
++        assert_eq!(usize::from(error.range.end()), MAX_NESTING + 1);
+     }
+
+@@ -140,8 +147,8 @@
+             ("(-123", "expected ')'", 5, 5),
+         ] {
+-            let error = parse(source).unwrap_err();
++            let error = syntax_error(source);
+             assert_eq!(error.message, message, "{source:?}");
+-            assert_eq!(error.range.start().0, start);
+-            assert_eq!(error.range.end().0, end);
++            assert_eq!(usize::from(error.range.start()), start);
++            assert_eq!(usize::from(error.range.end()), end);
+         }
+     }
+@@ -156,8 +163,8 @@
+         );
+
+-        let error = parse(&format!("-{at_limit}")).unwrap_err();
+-        assert_eq!(error.message, "expression nesting limit exceeded");
+-        assert_eq!(error.range.start().0, MAX_NESTING);
+-        assert_eq!(error.range.end().0, MAX_NESTING + 1);
++        let error = syntax_error(&format!("-{at_limit}"));
++        assert_eq!(error.message, "expression nesting limit exceeded");
++        assert_eq!(usize::from(error.range.start()), MAX_NESTING);
++        assert_eq!(usize::from(error.range.end()), MAX_NESTING + 1);
+     }
+
+@@ -189,8 +196,8 @@
+             ")".repeat(groups)
+         );
+-        let error = parse(&too_deep).unwrap_err();
+-        assert_eq!(error.message, "expression nesting limit exceeded");
+-        assert_eq!(error.range.start().0, MAX_NESTING);
+-        assert_eq!(error.range.end().0, MAX_NESTING + 1);
++        let error = syntax_error(&too_deep);
++        assert_eq!(error.message, "expression nesting limit exceeded");
++        assert_eq!(usize::from(error.range.start()), MAX_NESTING);
++        assert_eq!(usize::from(error.range.end()), MAX_NESTING + 1);
+     }
+
+@@ -218,8 +225,8 @@
+             ("8 / 2 3", "expected end of input", 6, 7),
+         ] {
+-            let error = parse(source).unwrap_err();
++            let error = syntax_error(source);
+             assert_eq!(error.message, message, "{source:?}");
+-            assert_eq!(error.range.start().0, start);
+-            assert_eq!(error.range.end().0, end);
++            assert_eq!(usize::from(error.range.start()), start);
++            assert_eq!(usize::from(error.range.end()), end);
+         }
+     }
+@@ -238,9 +245,9 @@
+         );
+
+-        let error = parse(&format!("{at_limit} * 1")).unwrap_err();
++        let error = syntax_error(&format!("{at_limit} * 1"));
+         let operator = 2 + 4 * MAX_NESTING;
+         assert_eq!(error.message, "expression nesting limit exceeded");
+-        assert_eq!(error.range.start().0, operator);
+-        assert_eq!(error.range.end().0, operator + 1);
++        assert_eq!(usize::from(error.range.start()), operator);
++        assert_eq!(usize::from(error.range.end()), operator + 1);
+     }
+
+@@ -257,8 +264,8 @@
+             (format!("1 * {signs}1"), 2),
+         ] {
+-            let error = parse(&source).unwrap_err();
++            let error = syntax_error(&source);
+             assert_eq!(error.message, "expression nesting limit exceeded");
+-            assert_eq!(error.range.start().0, operator);
+-            assert_eq!(error.range.end().0, operator + 1);
++            assert_eq!(usize::from(error.range.start()), operator);
++            assert_eq!(usize::from(error.range.end()), operator + 1);
+         }
+     }
+@@ -270,9 +277,9 @@
+
+         let too_deep = format!("(1{})", " * 1".repeat(MAX_NESTING));
+-        let error = parse(&too_deep).unwrap_err();
++        let error = syntax_error(&too_deep);
+         let operator = 3 + 4 * (MAX_NESTING - 1);
+         assert_eq!(error.message, "expression nesting limit exceeded");
+-        assert_eq!(error.range.start().0, operator);
+-        assert_eq!(error.range.end().0, operator + 1);
++        assert_eq!(usize::from(error.range.start()), operator);
++        assert_eq!(usize::from(error.range.end()), operator + 1);
+     }
+
+@@ -303,8 +310,8 @@
+             ("1 + (2 * )", "expected an expression", 9, 10),
+         ] {
+-            let error = parse(source).unwrap_err();
++            let error = syntax_error(source);
+             assert_eq!(error.message, message, "{source:?}");
+-            assert_eq!(error.range.start().0, start);
+-            assert_eq!(error.range.end().0, end);
++            assert_eq!(usize::from(error.range.start()), start);
++            assert_eq!(usize::from(error.range.end()), end);
+         }
+     }
+@@ -330,9 +337,9 @@
+         );
+
+-        let error = parse(&format!("{at_limit} + 1")).unwrap_err();
++        let error = syntax_error(&format!("{at_limit} + 1"));
+         let operator = 2 + 4 * MAX_NESTING;
+         assert_eq!(error.message, "expression nesting limit exceeded");
+-        assert_eq!(error.range.start().0, operator);
+-        assert_eq!(error.range.end().0, operator + 1);
++        assert_eq!(usize::from(error.range.start()), operator);
++        assert_eq!(usize::from(error.range.end()), operator + 1);
+     }
+
+@@ -356,8 +363,8 @@
+             (format!("(1{sums})"), 3 + 4 * (MAX_NESTING - 1)),
+         ] {
+-            let error = parse(&source).unwrap_err();
++            let error = syntax_error(&source);
+             assert_eq!(error.message, "expression nesting limit exceeded");
+-            assert_eq!(error.range.start().0, operator);
+-            assert_eq!(error.range.end().0, operator + 1);
++            assert_eq!(usize::from(error.range.start()), operator);
++            assert_eq!(usize::from(error.range.end()), operator + 1);
+         }
+     }
+```
+
+</details>
+
+## Update the callers at their boundaries
+
+The parsed-source example must handle both failure categories. Apply this
+patch to **`rlox/crates/syntax/examples/parse_expression.rs`**, keeping its
+input list unchanged:
+
+```diff title="rlox/crates/syntax/examples/parse_expression.rs · failures and offsets"
+@@ -1,3 +1,3 @@
+-use rlox_syntax::parser::parse;
++use rlox_syntax::parser::{ParseFailure, parse};
+
+ fn main() {
+@@ -41,10 +41,11 @@
+         match parse(source) {
+             Ok(expr) => println!("{source:?} => {}", expr.to_prefix()),
+-            Err(error) => println!(
++            Err(ParseFailure::Syntax(error)) => println!(
+                 "{source:?} => {} [{}..{})",
+                 error.message,
+-                error.range.start().0,
+-                error.range.end().0,
++                usize::from(error.range.start()),
++                usize::from(error.range.end()),
+             ),
++            Err(ParseFailure::SourceTooLarge(error)) => println!("{source:?} => {error}"),
+         }
+     }
+```
+
+The syntax branch displays a range. The capacity branch displays only the
+input failure's message. Ordinary source cases should produce exactly the
+same output as before.
+
+The app calls the safe slicing helper directly, so add its local text
+package dependency beside the syntax dependency in
+**`rlox/crates/app/Cargo.toml`**:
+
+```diff title="rlox/crates/app/Cargo.toml · direct coordinate-helper dependency"
+ rlox-syntax = { path = "../syntax" }
++rlox-text = { path = "../text" }
+```
+
+Apply this patch to **`rlox/crates/app/src/main.rs`**:
+
+```diff title="rlox/crates/app/src/main.rs · checked scanning and byte presentation"
+@@ -3,4 +3,5 @@
+ use clap::{Parser, Subcommand};
+ use rlox_syntax::{SyntaxKind, scan};
++use rlox_text::slice;
+
+ #[derive(Parser)]
+@@ -40,18 +41,22 @@
+         Command::Source { .. } => print!("{source}"),
+         Command::Tokens { .. } => {
++            let tokens = match scan(&source) {
++                Ok(tokens) => tokens,
++                Err(error) => {
++                    eprintln!("rlox: {error}");
++                    return ExitCode::FAILURE;
++                }
++            };
+             let mut had_error = false;
+-            for token in scan(&source) {
++            for token in tokens {
+                 if token.kind == SyntaxKind::Error {
+                     had_error = true;
+                 }
+-                let spelling = token
+-                    .range
+-                    .slice(&source)
+-                    .expect("scanner ranges are valid");
++                let spelling = slice(&source, token.range).expect("scanner ranges are valid");
+                 println!(
+                     "{:?} [{}..{}) {:?}",
+                     token.kind,
+-                    token.range.start().0,
+-                    token.range.end().0,
++                    usize::from(token.range.start()),
++                    usize::from(token.range.end()),
+                     spelling
+                 );
+```
+
+A source-limit error prints to stderr and returns failure before listing
+any tokens. The existing lexical-error flag still works over `Ok(tokens)`:
+representable malformed input gets its full listing, then the usual
+summary. The `source` command still prints the file's contents.
+
+## Check the migration as a whole
+
+The cross-crate edit group is now complete. Run:
+
+```sh
+cargo check --workspace --all-targets
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+Cargo should resolve the pinned Rowan dependency and update the root
+`Cargo.lock`; keep that generated lockfile with the manifest changes. The
+text tests should pass with the new boundary case. Scanner, arithmetic
+parser, printer and CLI tests should continue to pass with their original
+behavior and byte positions.
+
+Run the two existing inspection routes:
+
+```sh
+cargo run -- tokens hello.lox
+cargo run -p rlox-syntax --example parse_expression
+```
+
+The token rows, source spellings and ranges should be unchanged. The
+parsed-source example should still print the observations from 11.5,
+including the same located failure messages. For example:
+
+```text
+"1 + 2 * 3" => (+ 1 (* 2 3))
+"1 +" => expected an expression [3..3)
+```
+
+Its new file-level
+branch isn't exercised by these small inputs; the integer-size test checks
+the capacity boundary without a multi-gigabyte allocation.
+
+We now share Rowan's coordinate types while preserving byte-based behavior
+and checked slicing. Oversized input has a defined failure path before it
+can create unrepresentable locations. Next we'll build a small concrete
+syntax tree that retains the source our owned expression tree leaves out.
+
+<details>
+<summary>Complete resulting file · rlox/crates/text/Cargo.toml</summary>
+
+```toml title="rlox/crates/text/Cargo.toml · complete resulting file"
+[package]
+name = "rlox-text"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rowan = "=0.17.0"
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/text/src/lib.rs</summary>
+
+```rust title="rlox/crates/text/src/lib.rs · complete resulting file"
+use std::fmt;
+
+pub use rowan::{TextRange, TextSize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceTooLarge;
+
+impl fmt::Display for SourceTooLarge {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("source exceeds the 4,294,967,295-byte size limit")
+    }
+}
+
+pub fn checked_size(bytes: usize) -> Result<TextSize, SourceTooLarge> {
+    TextSize::try_from(bytes).map_err(|_| SourceTooLarge)
+}
+
+pub fn checked_range(start: TextSize, end: TextSize) -> Option<TextRange> {
+    if start > end {
+        return None;
+    }
+    Some(TextRange::new(start, end))
+}
+
+pub fn slice(source: &str, range: TextRange) -> Option<&str> {
+    source.get(usize::from(range.start())..usize::from(range.end()))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyntaxOrigin {
+    pub file: FileId,
+    pub range: TextRange,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FileId, SourceTooLarge, SyntaxOrigin, TextSize, checked_range, checked_size, slice,
+    };
+
+    #[test]
+    fn selects_ascii_fragment() {
+        let word = checked_range(TextSize::new(0), TextSize::new(5)).expect("ordered range");
+
+        assert_eq!(slice("print 42;", word), Some("print"));
+    }
+
+    #[test]
+    fn rejects_reversed_range() {
+        assert_eq!(checked_range(TextSize::new(5), TextSize::new(0)), None);
+    }
+
+    #[test]
+    fn respects_utf8_boundaries() {
+        let source = "aé!";
+        let accent = checked_range(TextSize::new(1), TextSize::new(3)).expect("ordered range");
+        let split = checked_range(TextSize::new(1), TextSize::new(2)).expect("ordered range");
+
+        assert_eq!(slice(source, accent), Some("é"));
+        assert_eq!(slice(source, split), None);
+    }
+
+    #[test]
+    fn checks_bounds_and_empty_ranges() {
+        let source = "aé!";
+        let end = checked_size(source.len()).expect("representable offset");
+        let eof = checked_range(end, end).expect("ordered range");
+        let beyond = checked_range(TextSize::new(0), TextSize::new(5)).expect("ordered range");
+        let interior = checked_range(TextSize::new(2), TextSize::new(2)).expect("ordered range");
+
+        assert_eq!(slice(source, eof), Some(""));
+        assert_eq!(slice(source, beyond), None);
+        assert_eq!(slice(source, interior), None);
+    }
+
+    #[test]
+    fn same_range_in_different_files_has_different_origins() {
+        let range = checked_range(TextSize::new(0), TextSize::new(5)).expect("ordered range");
+        let first = SyntaxOrigin {
+            file: FileId(0),
+            range,
+        };
+        let second = SyntaxOrigin {
+            file: FileId(1),
+            range,
+        };
+
+        assert_eq!(first.range, second.range);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn selects_text_from_identified_source() {
+        let first_source = "print 42;";
+        let second_source = "while (true) {}";
+        let origin = SyntaxOrigin {
+            file: FileId(1),
+            range: checked_range(TextSize::new(0), TextSize::new(5)).expect("ordered range"),
+        };
+
+        let source = match origin.file {
+            FileId(0) => first_source,
+            FileId(1) => second_source,
+            _ => panic!("file ID was not assigned in this example"),
+        };
+
+        assert_eq!(slice(source, origin.range), Some("while"));
+    }
+
+    #[test]
+    fn checks_capacity_without_allocating_source() {
+        let maximum = usize::try_from(u32::MAX).expect("u32 fits this target's usize");
+        assert_eq!(checked_size(maximum), Ok(TextSize::new(u32::MAX)));
+        if let Some(too_large) = maximum.checked_add(1) {
+            assert_eq!(checked_size(too_large), Err(SourceTooLarge));
+        }
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/src/lib.rs</summary>
+
+```rust title="rlox/crates/syntax/src/lib.rs · complete resulting file"
+pub mod expr;
+pub mod parser;
+
+use logos::Logos;
+
+use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size};
+
+#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxKind {
+    #[token("(")]
+    LeftParen,
+    #[token(")")]
+    RightParen,
+    #[token("{")]
+    LeftBrace,
+    #[token("}")]
+    RightBrace,
+    #[token(",")]
+    Comma,
+    #[token(".")]
+    Dot,
+    #[token("-")]
+    Minus,
+    #[token("+")]
+    Plus,
+    #[token(";")]
+    Semicolon,
+    #[token("/")]
+    Slash,
+    #[token("*")]
+    Star,
+    #[token("!")]
+    Bang,
+    #[token("!=")]
+    BangEqual,
+    #[token("=")]
+    Equal,
+    #[token("==")]
+    EqualEqual,
+    #[token(">")]
+    Greater,
+    #[token(">=")]
+    GreaterEqual,
+    #[token("<")]
+    Less,
+    #[token("<=")]
+    LessEqual,
+    #[token("and")]
+    And,
+    #[token("class")]
+    Class,
+    #[token("else")]
+    Else,
+    #[token("false")]
+    False,
+    #[token("for")]
+    For,
+    #[token("fun")]
+    Fun,
+    #[token("if")]
+    If,
+    #[token("nil")]
+    Nil,
+    #[token("or")]
+    Or,
+    #[token("print")]
+    Print,
+    #[token("return")]
+    Return,
+    #[token("super")]
+    Super,
+    #[token("this")]
+    This,
+    #[token("true")]
+    True,
+    #[token("var")]
+    Var,
+    #[token("while")]
+    While,
+    #[regex(r#""[^"]*""#)]
+    String,
+    #[regex(r"[0-9]+(\.[0-9]+)?")]
+    Number,
+    #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
+    Identifier,
+    #[regex(r"[ \t\r\n]+")]
+    Whitespace,
+    #[regex(r"//[^\n]*", allow_greedy = true)]
+    LineComment,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+
+pub fn scan(source: &str) -> Result<Vec<Token>, SourceTooLarge> {
+    checked_size(source.len())?;
+    let mut tokens = Vec::new();
+
+    for (result, span) in SyntaxKind::lexer(source).spanned() {
+        let kind = match result {
+            Ok(kind) => kind,
+            Err(()) => SyntaxKind::Error,
+        };
+        let range = checked_range(
+            checked_size(span.start).expect("validated source length"),
+            checked_size(span.end).expect("validated source length"),
+        )
+        .expect("Logos spans are ordered");
+
+        tokens.push(Token { kind, range });
+    }
+
+    Ok(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextSize, checked_range, checked_size, slice};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()=!").expect("small test source");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: checked_range(TextSize::new(1), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: checked_range(TextSize::new(2), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: checked_range(TextSize::new(3), TextSize::new(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").expect("small test source").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source).expect("small test source");
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(slice(source, tokens[0].range), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(slice(source, tokens[1].range), Some("!"));
+    }
+
+    #[test]
+    fn scans_adjacent_paired_operators() {
+        assert_eq!(
+            scan("!===").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::EqualEqual,
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_lookahead_preserves_the_next_character() {
+        assert_eq!(
+            scan("!é(").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(1), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: checked_range(TextSize::new(3), TextSize::new(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn single_operator_can_end_the_source() {
+        for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifiers_stop_before_operators() {
+        assert_eq!(
+            scan("a_2!=other").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: checked_range(TextSize::new(3), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(5), TextSize::new(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn identifiers_can_end_the_source() {
+        for source in ["_", "A9", "printer"] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn number_and_name_boundaries_preserve_unknown_characters() {
+        assert_eq!(
+            scan("2aé_b").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Number,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(1), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(4), TextSize::new(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_whitespace_between_tokens() {
+        assert_eq!(
+            scan("a \t\r\n!= b").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(1), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: checked_range(TextSize::new(5), TextSize::new(7)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(7), TextSize::new(8)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(8), TextSize::new(9)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn whitespace_uses_the_lox_character_set() {
+        for source in ["\u{000b}", "\u{000c}", "\u{00a0}"] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_ranges_cover_the_original_source() {
+        for source in [
+            "",
+            " \t\r\n",
+            "a \t\r\n!= b",
+            "a_2!=other",
+            "2aé_b",
+            "a\u{00a0}b",
+            "/",
+            "/name",
+            "//",
+            "//\n",
+            "//é\r\nname",
+            "///",
+            "a//x\nb",
+            "{},.-+;*",
+            "<=>=<>",
+            "<==>==",
+            "a<=b!=c>=d",
+            "(a+b)*c;",
+            "print printer",
+            "for forest",
+            "class classify",
+            "if(if_1)",
+            "return // print\nprinter",
+            "0 001 123.456",
+            "123. .5 -12 +3.5 1.2.3",
+            "123abc a2",
+            "print 0.5;//é\n123.",
+            r#"print "é";"#,
+            r#""a""b";"#,
+            r#""\"name"#,
+            "\"first\nsecond\" // done\n0.5",
+            "\"",
+            "\"é",
+            "\"first\n// still inside",
+            r#""ok""é"#,
+        ] {
+            let mut offset = 0;
+            let mut reconstructed = String::new();
+
+            for token in scan(source).expect("small test source") {
+                let text = slice(source, token.range).expect("valid UTF-8 source slice");
+                assert!(!text.is_empty());
+                let end = offset + text.len();
+                let expected = checked_range(
+                    checked_size(offset).expect("representable offset"),
+                    checked_size(end).expect("representable offset"),
+                )
+                .unwrap();
+                assert_eq!(token.range, expected);
+
+                reconstructed.push_str(text);
+                offset = end;
+            }
+
+            assert_eq!(offset, source.len());
+            assert_eq!(reconstructed, source);
+        }
+    }
+
+    #[test]
+    fn recognizes_single_slashes() {
+        assert_eq!(
+            scan("/").expect("small test source"),
+            vec![Token {
+                kind: SyntaxKind::Slash,
+                range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+            }]
+        );
+        assert_eq!(
+            scan("/name").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Slash,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(1), TextSize::new(5)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_leave_the_line_feed_unread() {
+        assert_eq!(
+            scan("//é\r\nname").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LineComment,
+                    range: checked_range(TextSize::new(0), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(6), TextSize::new(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_can_end_at_eof() {
+        for source in ["//", "//é", "///"] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::LineComment,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_characters_remain_separate_tokens() {
+        assert_eq!(
+            scan("@é💥").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(1), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(3), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_remaining_single_character_punctuation() {
+        for (source, kind) in [
+            ("{", SyntaxKind::LeftBrace),
+            ("}", SyntaxKind::RightBrace),
+            (",", SyntaxKind::Comma),
+            (".", SyntaxKind::Dot),
+            ("-", SyntaxKind::Minus),
+            ("+", SyntaxKind::Plus),
+            (";", SyntaxKind::Semicolon),
+            ("*", SyntaxKind::Star),
+            ("<", SyntaxKind::Less),
+            (">", SyntaxKind::Greater),
+        ] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn recognizes_adjacent_comparison_operators() {
+        assert_eq!(
+            scan("<=>=<>").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Less,
+                    range: checked_range(TextSize::new(4), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Greater,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn comparison_pairs_leave_extra_equals_tokens() {
+        assert_eq!(
+            scan("<==>==").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: checked_range(TextSize::new(2), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: checked_range(TextSize::new(3), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_reserved_words() {
+        for (source, kind) in [
+            ("and", SyntaxKind::And),
+            ("class", SyntaxKind::Class),
+            ("else", SyntaxKind::Else),
+            ("false", SyntaxKind::False),
+            ("for", SyntaxKind::For),
+            ("fun", SyntaxKind::Fun),
+            ("if", SyntaxKind::If),
+            ("nil", SyntaxKind::Nil),
+            ("or", SyntaxKind::Or),
+            ("print", SyntaxKind::Print),
+            ("return", SyntaxKind::Return),
+            ("super", SyntaxKind::Super),
+            ("this", SyntaxKind::This),
+            ("true", SyntaxKind::True),
+            ("var", SyntaxKind::Var),
+            ("while", SyntaxKind::While),
+        ] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn keywords_do_not_split_longer_identifiers() {
+        for source in [
+            "forest",
+            "printer",
+            "classify",
+            "true_value",
+            "_if",
+            "Print",
+        ] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_spelling_comes_from_the_source() {
+        let source = "print printer";
+        let tokens = scan(source).expect("small test source");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::Print,
+                    range: checked_range(TextSize::new(0), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(6), TextSize::new(13)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(slice(source, tokens[0].range), Some("print"));
+        assert_eq!(slice(source, tokens[1].range), Some(" "));
+        assert_eq!(slice(source, tokens[2].range), Some("printer"));
+    }
+
+    #[test]
+    fn recognizes_number_spellings() {
+        for source in ["0", "123", "001", "0.5", "123.456", "00.50"] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Number,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+            assert_eq!(slice(source, tokens[0].range), Some(source));
+        }
+    }
+
+    #[test]
+    fn numbers_leave_dots_signs_and_names_separate() {
+        for (source, expected) in [
+            (
+                "123.",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Dot, 3, 4)],
+            ),
+            (
+                ".5",
+                vec![(SyntaxKind::Dot, 0, 1), (SyntaxKind::Number, 1, 2)],
+            ),
+            (
+                "-12",
+                vec![(SyntaxKind::Minus, 0, 1), (SyntaxKind::Number, 1, 3)],
+            ),
+            (
+                "+3.5",
+                vec![(SyntaxKind::Plus, 0, 1), (SyntaxKind::Number, 1, 4)],
+            ),
+            (
+                "1.2.3",
+                vec![
+                    (SyntaxKind::Number, 0, 3),
+                    (SyntaxKind::Dot, 3, 4),
+                    (SyntaxKind::Number, 4, 5),
+                ],
+            ),
+            (
+                "123abc",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Identifier, 3, 6)],
+            ),
+            ("a2", vec![(SyntaxKind::Identifier, 0, 2)]),
+        ] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(tokens.len(), expected.len(), "{source}");
+            for (token, (kind, start, end)) in tokens.iter().zip(expected) {
+                assert_eq!(token.kind, kind, "{source}");
+                assert_eq!(
+                    token.range,
+                    checked_range(
+                        checked_size(start).expect("representable offset"),
+                        checked_size(end).expect("representable offset")
+                    )
+                    .unwrap(),
+                    "{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn keeps_complete_string_spellings() {
+        for source in [
+            r#""""#,
+            r#""hello""#,
+            r#""// 123 ; print""#,
+            "\"é💥\"",
+            "\"first\nsecond\"",
+            r#""\n""#,
+        ] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+            assert_eq!(slice(source, tokens[0].range), Some(source));
+        }
+    }
+
+    #[test]
+    fn strings_stop_at_the_next_quote() {
+        let source = r#""a""b";"#;
+        let tokens = scan(source).expect("small test source");
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(3), TextSize::new(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Semicolon,
+                    range: checked_range(TextSize::new(6), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(slice(source, tokens[0].range), Some(r#""a""#));
+        assert_eq!(slice(source, tokens[1].range), Some(r#""b""#));
+    }
+
+    #[test]
+    fn backslash_does_not_escape_a_quote() {
+        let source = r#""\"name"#;
+        assert_eq!(
+            scan(source).expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(3), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn unterminated_strings_cover_the_remaining_source() {
+        for source in ["\"", "\"é", "\"first\n// still inside"] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+            assert_eq!(slice(source, tokens[0].range), Some(source));
+        }
+
+        assert_eq!(
+            scan(r#""ok""é"#).expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(0), TextSize::new(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(4), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/src/parser.rs</summary>
+
+```rust title="rlox/crates/syntax/src/parser.rs · complete resulting file"
+use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size, slice};
+
+use crate::expr::{BinaryOp, Expr, UnaryOp};
+use crate::{SyntaxKind, Token, scan};
+
+const MAX_NESTING: usize = 64;
+
+#[derive(Debug)]
+pub struct ParseError {
+    pub message: String,
+    pub range: TextRange,
+}
+
+#[derive(Debug)]
+pub enum ParseFailure {
+    SourceTooLarge(SourceTooLarge),
+    Syntax(ParseError),
+}
+
+fn error_at(token: Token, message: &str) -> ParseError {
+    let message = if token.kind == SyntaxKind::Error {
+        "invalid token"
+    } else {
+        message
+    };
+    ParseError {
+        message: message.to_owned(),
+        range: token.range,
+    }
+}
+
+fn tree_height(expr: &Expr) -> usize {
+    match expr {
+        Expr::Number(_) => 0,
+        Expr::Grouping(child) => 1 + tree_height(child),
+        Expr::Unary { right, .. } => 1 + tree_height(right),
+        Expr::Binary { left, right, .. } => 1 + tree_height(left).max(tree_height(right)),
+    }
+}
+
+pub fn parse(source: &str) -> Result<Expr, ParseFailure> {
+    let mut parser = Parser::new(source).map_err(ParseFailure::SourceTooLarge)?;
+    let expr = parser.expression(0).map_err(ParseFailure::Syntax)?;
+    if parser.peek().is_some() {
+        return Err(ParseFailure::Syntax(parser.error("expected end of input")));
+    }
+    Ok(expr)
+}
+
+struct Parser<'src> {
+    source: &'src str,
+    tokens: Vec<Token>,
+    current: usize,
+}
+
+impl<'src> Parser<'src> {
+    fn new(source: &'src str) -> Result<Self, SourceTooLarge> {
+        let mut tokens = scan(source)?;
+        tokens.retain(|token| {
+            !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::LineComment)
+        });
+        Ok(Self {
+            source,
+            tokens,
+            current: 0,
+        })
+    }
+
+    fn expression(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        self.term(nesting)
+    }
+
+    fn term(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        let mut expr = self.factor(nesting)?;
+        let mut height = tree_height(&expr);
+
+        while let Some(token) = self.peek() {
+            let op = match token.kind {
+                SyntaxKind::Plus => BinaryOp::Add,
+                SyntaxKind::Minus => BinaryOp::Subtract,
+                _ => break,
+            };
+            self.bump();
+            let right = self.factor(nesting)?;
+            let next_height = 1 + height.max(tree_height(&right));
+            if nesting + next_height > MAX_NESTING {
+                return Err(error_at(token, "expression nesting limit exceeded"));
+            }
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op,
+                right: Box::new(right),
+            };
+            height = next_height;
+        }
+
+        Ok(expr)
+    }
+
+    fn factor(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        let mut expr = self.unary(nesting)?;
+        let mut height = tree_height(&expr);
+
+        while let Some(token) = self.peek() {
+            let op = match token.kind {
+                SyntaxKind::Star => BinaryOp::Multiply,
+                SyntaxKind::Slash => BinaryOp::Divide,
+                _ => break,
+            };
+            self.bump();
+            let right = self.unary(nesting)?;
+            let next_height = 1 + height.max(tree_height(&right));
+            if nesting + next_height > MAX_NESTING {
+                return Err(error_at(token, "expression nesting limit exceeded"));
+            }
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op,
+                right: Box::new(right),
+            };
+            height = next_height;
+        }
+
+        Ok(expr)
+    }
+
+    fn unary(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        match self.peek() {
+            Some(token) if token.kind == SyntaxKind::Minus => {
+                if nesting >= MAX_NESTING {
+                    return Err(self.error("expression nesting limit exceeded"));
+                }
+                self.bump();
+                let right = self.unary(nesting + 1)?;
+                Ok(Expr::Unary {
+                    op: UnaryOp::Negate,
+                    right: Box::new(right),
+                })
+            }
+            _ => self.primary(nesting),
+        }
+    }
+
+    fn primary(&mut self, nesting: usize) -> Result<Expr, ParseError> {
+        let token = match self.peek() {
+            Some(token) => token,
+            None => return Err(self.error("expected an expression")),
+        };
+        match token.kind {
+            SyntaxKind::Number => self.number(),
+            SyntaxKind::LeftParen => {
+                if nesting >= MAX_NESTING {
+                    return Err(self.error("expression nesting limit exceeded"));
+                }
+                self.bump();
+                let inner = self.expression(nesting + 1)?;
+                match self.peek() {
+                    Some(close) if close.kind == SyntaxKind::RightParen => self.bump(),
+                    _ => return Err(self.error("expected ')'")),
+                }
+                Ok(Expr::Grouping(Box::new(inner)))
+            }
+            _ => Err(self.error("expected an expression")),
+        }
+    }
+
+    fn number(&mut self) -> Result<Expr, ParseError> {
+        let token = match self.peek() {
+            Some(token) => token,
+            None => return Err(self.error("expected a number")),
+        };
+        if token.kind != SyntaxKind::Number {
+            return Err(self.error("expected a number"));
+        }
+
+        let spelling = slice(self.source, token.range).expect("scanner ranges are valid");
+        let value = spelling
+            .parse::<f64>()
+            .map_err(|_| error_at(token, "invalid number"))?;
+        self.bump();
+        Ok(Expr::Number(value))
+    }
+
+    fn peek(&self) -> Option<Token> {
+        self.tokens.get(self.current).copied()
+    }
+
+    fn bump(&mut self) {
+        self.current += 1;
+    }
+
+    fn error(&self, message: &str) -> ParseError {
+        match self.peek() {
+            Some(token) => error_at(token, message),
+            None => {
+                let end = checked_size(self.source.len()).expect("validated source length");
+                ParseError {
+                    message: message.to_owned(),
+                    range: checked_range(end, end).expect("ordered EOF range"),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_NESTING, ParseError, ParseFailure, parse};
+
+    fn syntax_error(source: &str) -> ParseError {
+        match parse(source) {
+            Err(ParseFailure::Syntax(error)) => error,
+            other => panic!("expected a syntax error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_number_spellings_and_surrounding_trivia() {
+        for (source, expected) in [
+            ("0", "0"),
+            ("001.50", "1.5"),
+            (" \t123 // note\n", "123"),
+            (" // é\n12.5 // end", "12.5"),
+        ] {
+            let expr = parse(source).expect("one number");
+            assert_eq!(expr.to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn missing_expression_points_to_source_end() {
+        for source in ["", " \t\n", " // é\n"] {
+            let error = syntax_error(source);
+            assert_eq!(error.message, "expected an expression");
+            assert_eq!(usize::from(error.range.start()), source.len());
+            assert_eq!(usize::from(error.range.end()), source.len());
+        }
+    }
+
+    #[test]
+    fn rejects_a_second_number() {
+        let error = syntax_error("123 456");
+        assert_eq!(error.message, "expected end of input");
+        assert_eq!(usize::from(error.range.start()), 4);
+        assert_eq!(usize::from(error.range.end()), 7);
+    }
+
+    #[test]
+    fn rejects_an_unexpected_token_kind() {
+        let error = syntax_error("hello");
+        assert_eq!(error.message, "expected an expression");
+        assert_eq!(usize::from(error.range.start()), 0);
+        assert_eq!(usize::from(error.range.end()), 5);
+    }
+
+    #[test]
+    fn retains_lexical_errors_and_utf8_ranges() {
+        for (source, start, end) in [("é", 0, 2), ("123 é", 4, 6)] {
+            let error = syntax_error(source);
+            assert_eq!(error.message, "invalid token");
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
+        }
+    }
+
+    #[test]
+    fn parses_nested_groups_and_trivia() {
+        for (source, expected) in [
+            ("(123)", "(group 123)"),
+            ("((12.5))", "(group (group 12.5))"),
+            ("( // é\n123 )", "(group 123)"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected);
+        }
+    }
+
+    #[test]
+    fn reports_missing_closing_parentheses() {
+        for (source, start, end) in [("(123", 4, 4), ("(123 456)", 5, 8), ("(123 // é\n", 11, 11)]
+        {
+            let error = syntax_error(source);
+            assert_eq!(error.message, "expected ')'");
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
+        }
+    }
+
+    #[test]
+    fn rejects_empty_groups_and_trailing_closes() {
+        let empty = syntax_error("()");
+        assert_eq!(empty.message, "expected an expression");
+        assert_eq!(usize::from(empty.range.start()), 1);
+        assert_eq!(usize::from(empty.range.end()), 2);
+
+        let extra = syntax_error("123)");
+        assert_eq!(extra.message, "expected end of input");
+        assert_eq!(usize::from(extra.range.start()), 3);
+        assert_eq!(usize::from(extra.range.end()), 4);
+    }
+
+    #[test]
+    fn retains_lexical_errors_inside_groups() {
+        for (source, start, end) in [("(é)", 1, 3), ("(123 é)", 5, 7)] {
+            let error = syntax_error(source);
+            assert_eq!(error.message, "invalid token");
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
+        }
+    }
+
+    #[test]
+    fn checks_both_sides_of_the_nesting_limit() {
+        let at_limit = format!("{}1{}", "(".repeat(MAX_NESTING), ")".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}1{}",
+                "(group ".repeat(MAX_NESTING),
+                ")".repeat(MAX_NESTING)
+            )
+        );
+
+        let too_deep = format!("({at_limit})");
+        let error = syntax_error(&too_deep);
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(usize::from(error.range.start()), MAX_NESTING);
+        assert_eq!(usize::from(error.range.end()), MAX_NESTING + 1);
+    }
+
+    #[test]
+    fn parses_unary_chains_grouping_and_trivia() {
+        for (source, expected) in [
+            ("-123", "(- 123)"),
+            ("--123", "(- (- 123))"),
+            ("-(123)", "(- (group 123))"),
+            ("(-123)", "(group (- 123))"),
+            (" - // é\n-12.5 ", "(- (- 12.5))"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn reports_unary_operand_and_delimiter_errors() {
+        for (source, message, start, end) in [
+            ("-", "expected an expression", 1, 1),
+            ("--", "expected an expression", 2, 2),
+            ("(-)", "expected an expression", 2, 3),
+            ("-é", "invalid token", 1, 3),
+            ("-123)", "expected end of input", 4, 5),
+            ("(-123", "expected ')'", 5, 5),
+        ] {
+            let error = syntax_error(source);
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
+        }
+    }
+
+    #[test]
+    fn bounds_unary_nesting() {
+        let at_limit = format!("{}1", "-".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured unary depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!("{}1{}", "(- ".repeat(MAX_NESTING), ")".repeat(MAX_NESTING))
+        );
+
+        let error = syntax_error(&format!("-{at_limit}"));
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(usize::from(error.range.start()), MAX_NESTING);
+        assert_eq!(usize::from(error.range.end()), MAX_NESTING + 1);
+    }
+
+    #[test]
+    fn shares_the_budget_between_groups_and_negation() {
+        let groups = MAX_NESTING / 2;
+        let signs = MAX_NESTING - groups;
+        let at_limit = format!(
+            "{}{}1{}",
+            "(".repeat(groups),
+            "-".repeat(signs),
+            ")".repeat(groups)
+        );
+        let expr = parse(&at_limit).expect("the combined depth is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}{}1{}",
+                "(group ".repeat(groups),
+                "(- ".repeat(signs),
+                ")".repeat(MAX_NESTING)
+            )
+        );
+
+        let too_deep = format!(
+            "{}{}1{}",
+            "(".repeat(groups),
+            "-".repeat(signs + 1),
+            ")".repeat(groups)
+        );
+        let error = syntax_error(&too_deep);
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(usize::from(error.range.start()), MAX_NESTING);
+        assert_eq!(usize::from(error.range.end()), MAX_NESTING + 1);
+    }
+
+    #[test]
+    fn parses_multiplicative_chains_and_unary_operands() {
+        for (source, expected) in [
+            ("8 / 4 / 2", "(/ (/ 8 4) 2)"),
+            ("8 * 4 / 2", "(/ (* 8 4) 2)"),
+            ("8 / (4 / 2)", "(/ 8 (group (/ 4 2)))"),
+            ("-8 * 4 / 2", "(/ (* (- 8) 4) 2)"),
+            ("8 * // é\n2", "(* 8 2)"),
+            ("8 / 0", "(/ 8 0)"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn reports_multiplicative_operand_errors() {
+        for (source, message, start, end) in [
+            ("8 *", "expected an expression", 3, 3),
+            ("8 **2", "expected an expression", 3, 4),
+            ("8 / é", "invalid token", 4, 6),
+            ("(8 /)", "expected an expression", 4, 5),
+            ("8 / 2 3", "expected end of input", 6, 7),
+        ] {
+            let error = syntax_error(source);
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
+        }
+    }
+
+    #[test]
+    fn bounds_the_height_of_a_left_fold() {
+        let at_limit = format!("1{}", " * 1".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured binary height is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}1{}",
+                "(* ".repeat(MAX_NESTING),
+                " 1)".repeat(MAX_NESTING)
+            )
+        );
+
+        let error = syntax_error(&format!("{at_limit} * 1"));
+        let operator = 2 + 4 * MAX_NESTING;
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(usize::from(error.range.start()), operator);
+        assert_eq!(usize::from(error.range.end()), operator + 1);
+    }
+
+    #[test]
+    fn includes_both_operand_heights() {
+        let signs = "-".repeat(MAX_NESTING - 1);
+        for source in [format!("{signs}1 * 1"), format!("1 * {signs}1")] {
+            assert!(parse(&source).is_ok(), "{source}");
+        }
+
+        let signs = "-".repeat(MAX_NESTING);
+        for (source, operator) in [
+            (format!("{signs}1 * 1"), MAX_NESTING + 2),
+            (format!("1 * {signs}1"), 2),
+        ] {
+            let error = syntax_error(&source);
+            assert_eq!(error.message, "expression nesting limit exceeded");
+            assert_eq!(usize::from(error.range.start()), operator);
+            assert_eq!(usize::from(error.range.end()), operator + 1);
+        }
+    }
+
+    #[test]
+    fn includes_enclosing_grouping_in_the_binary_budget() {
+        let at_limit = format!("(1{})", " * 1".repeat(MAX_NESTING - 1));
+        assert!(parse(&at_limit).is_ok());
+
+        let too_deep = format!("(1{})", " * 1".repeat(MAX_NESTING));
+        let error = syntax_error(&too_deep);
+        let operator = 3 + 4 * (MAX_NESTING - 1);
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(usize::from(error.range.start()), operator);
+        assert_eq!(usize::from(error.range.end()), operator + 1);
+    }
+
+    #[test]
+    fn parses_additive_precedence_associativity_and_unary_operands() {
+        for (source, expected) in [
+            ("1 + 2 * 3", "(+ 1 (* 2 3))"),
+            ("(1 + 2) * 3", "(* (group (+ 1 2)) 3)"),
+            ("8 - 3 - 1", "(- (- 8 3) 1)"),
+            ("8 + 3 - 1", "(- (+ 8 3) 1)"),
+            ("1--2", "(- 1 (- 2))"),
+            ("1+-2", "(+ 1 (- 2))"),
+            ("-(1 + 2) * 3", "(* (- (group (+ 1 2))) 3)"),
+            ("1 + 2 * 3 - 4 / 2", "(- (+ 1 (* 2 3)) (/ 4 2))"),
+        ] {
+            assert_eq!(parse(source).unwrap().to_prefix(), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn reports_additive_operand_and_grouping_errors() {
+        for (source, message, start, end) in [
+            ("1 +", "expected an expression", 3, 3),
+            ("1 + +2", "expected an expression", 4, 5),
+            ("1 + é", "invalid token", 4, 6),
+            ("(1 + 2", "expected ')'", 6, 6),
+            ("1 + 2 3", "expected end of input", 6, 7),
+            ("1 + (2 * )", "expected an expression", 9, 10),
+        ] {
+            let error = syntax_error(source);
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
+        }
+    }
+
+    #[test]
+    fn numeric_spelling_and_trivia_do_not_survive_in_the_ast() {
+        for source in ["1 + 2 * 3", " 001.0 // first\n + 02.00 * 3"] {
+            assert_eq!(parse(source).unwrap().to_prefix(), "(+ 1 (* 2 3))");
+        }
+    }
+
+    #[test]
+    fn bounds_the_height_of_an_additive_chain() {
+        let at_limit = format!("1{}", " + 1".repeat(MAX_NESTING));
+        let expr = parse(&at_limit).expect("the configured additive height is accepted");
+        assert_eq!(
+            expr.to_prefix(),
+            format!(
+                "{}1{}",
+                "(+ ".repeat(MAX_NESTING),
+                " 1)".repeat(MAX_NESTING)
+            )
+        );
+
+        let error = syntax_error(&format!("{at_limit} + 1"));
+        let operator = 2 + 4 * MAX_NESTING;
+        assert_eq!(error.message, "expression nesting limit exceeded");
+        assert_eq!(usize::from(error.range.start()), operator);
+        assert_eq!(usize::from(error.range.end()), operator + 1);
+    }
+
+    #[test]
+    fn includes_factors_and_enclosing_groups_in_the_sum_budget() {
+        let factors = " * 1".repeat(MAX_NESTING - 1);
+        let sums = " + 1".repeat(MAX_NESTING - 1);
+        for source in [
+            format!("1{factors} + 1"),
+            format!("1 + 1{factors}"),
+            format!("(1{sums})"),
+        ] {
+            assert!(parse(&source).is_ok(), "{source}");
+        }
+
+        let factors = " * 1".repeat(MAX_NESTING);
+        let sums = " + 1".repeat(MAX_NESTING);
+        for (source, operator) in [
+            (format!("1{factors} + 1"), 2 + 4 * MAX_NESTING),
+            (format!("1 + 1{factors}"), 2),
+            (format!("(1{sums})"), 3 + 4 * (MAX_NESTING - 1)),
+        ] {
+            let error = syntax_error(&source);
+            assert_eq!(error.message, "expression nesting limit exceeded");
+            assert_eq!(usize::from(error.range.start()), operator);
+            assert_eq!(usize::from(error.range.end()), operator + 1);
+        }
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/examples/parse_expression.rs</summary>
+
+```rust title="rlox/crates/syntax/examples/parse_expression.rs · complete resulting file"
+use rlox_syntax::parser::{ParseFailure, parse};
+
+fn main() {
+    for source in [
+        " 123 // note\n",
+        "123 456",
+        "",
+        "é",
+        "(123)",
+        "((12.5))",
+        "( // é\n123 )",
+        "()",
+        "(123",
+        "(123 456)",
+        "123)",
+        "-123",
+        "--123",
+        "-(123)",
+        "(-123)",
+        "-",
+        "(-)",
+        "-é",
+        "8 / 4 / 2",
+        "8 * 4 / 2",
+        "8 / (4 / 2)",
+        "-8 * 4 / 2",
+        "8 *",
+        "8 **2",
+        "8 / é",
+        "1 + 2 * 3",
+        "(1 + 2) * 3",
+        "8 - 3 - 1",
+        "1--2",
+        "-(1 + 2) * 3",
+        "1 +",
+        "1 + +2",
+        "1 + é",
+        "(1 + 2",
+        " 001.0 // first\n + 02.00 * 3",
+    ] {
+        match parse(source) {
+            Ok(expr) => println!("{source:?} => {}", expr.to_prefix()),
+            Err(ParseFailure::Syntax(error)) => println!(
+                "{source:?} => {} [{}..{})",
+                error.message,
+                usize::from(error.range.start()),
+                usize::from(error.range.end()),
+            ),
+            Err(ParseFailure::SourceTooLarge(error)) => println!("{source:?} => {error}"),
+        }
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/app/Cargo.toml</summary>
+
+```toml title="rlox/crates/app/Cargo.toml · complete resulting file"
+[package]
+name = "rlox-app"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "rlox"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "=4.6.7", features = ["derive"] }
+rlox-syntax = { path = "../syntax" }
+rlox-text = { path = "../text" }
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/app/src/main.rs</summary>
+
+```rust title="rlox/crates/app/src/main.rs · complete resulting file"
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+use rlox_syntax::{SyntaxKind, scan};
+use rlox_text::slice;
+
+#[derive(Parser)]
+#[command(name = "rlox", about = "Inspect Lox source files")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Display a file's source text.
+    Source {
+        /// File whose text should be displayed.
+        file: String,
+    },
+    /// Display a file's tokens and source ranges.
+    Tokens {
+        /// File whose tokens should be displayed.
+        file: String,
+    },
+}
+
+fn main() -> ExitCode {
+    let command = Cli::parse().command;
+    let filename = match &command {
+        Command::Source { file } | Command::Tokens { file } => file,
+    };
+    let source = match std::fs::read_to_string(filename) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("rlox: could not read '{filename}': {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match command {
+        Command::Source { .. } => print!("{source}"),
+        Command::Tokens { .. } => {
+            let tokens = match scan(&source) {
+                Ok(tokens) => tokens,
+                Err(error) => {
+                    eprintln!("rlox: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let mut had_error = false;
+            for token in tokens {
+                if token.kind == SyntaxKind::Error {
+                    had_error = true;
+                }
+                let spelling = slice(&source, token.range).expect("scanner ranges are valid");
+                println!(
+                    "{:?} [{}..{}) {:?}",
+                    token.kind,
+                    usize::from(token.range.start()),
+                    usize::from(token.range.end()),
+                    spelling
+                );
+            }
+            if had_error {
+                eprintln!("rlox: scan contains lexical errors");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn accepts_source_command() {
+        let cli = Cli::try_parse_from(["rlox", "source", "hello.lox"])
+            .expect("source with a filename should parse");
+
+        match cli.command {
+            Command::Source { file } => assert_eq!(file, "hello.lox"),
+            Command::Tokens { .. } => panic!("expected the source command"),
+        }
+    }
+
+    #[test]
+    fn requires_known_command() {
+        assert!(Cli::try_parse_from(["rlox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "hello.lox"]).is_err());
+        assert!(Cli::try_parse_from(["rlox", "unknown", "hello.lox"]).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_filename() {
+        for command in ["source", "tokens"] {
+            assert!(Cli::try_parse_from(["rlox", command]).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_extra_filenames() {
+        for command in ["source", "tokens"] {
+            assert!(Cli::try_parse_from(["rlox", command, "hello.lox", "other.lox"]).is_err());
+        }
+    }
+
+    #[test]
+    fn help_is_a_successful_request() {
+        let help = Cli::try_parse_from(["rlox", "--help"])
+            .err()
+            .expect("help should stop parsing");
+
+        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+        assert_eq!(help.exit_code(), 0);
+    }
+
+    #[test]
+    fn accepts_tokens_command() {
+        let cli = Cli::try_parse_from(["rlox", "tokens", "hello.lox"])
+            .expect("tokens with a filename should parse");
+
+        match cli.command {
+            Command::Tokens { file } => assert_eq!(file, "hello.lox"),
+            Command::Source { .. } => panic!("expected the tokens command"),
+        }
+    }
+}
+```
+
+</details>

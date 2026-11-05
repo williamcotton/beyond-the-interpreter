@@ -227,3 +227,6 @@ Section 11.5 is drafted at `src/content/docs/chapter-11/11.5-parse-terms.mdx`,
 served at `/chapter-11/11.5-parse-terms/`. Its arithmetic parser and source-loss/error examples match the implementation
 and are accepted, completing Chapter 11. Example output, formatting, Clippy
 and all 74 workspace tests pass locally.
+
+Section 12.1 is drafted at `src/content/docs/chapter-12/12.1-rowan-coordinates.mdx`,
+served at `/chapter-12/12.1-rowan-coordinates/`. It introduces Rowan-compatible byte coordinates and explicit source-capacity errors, with every scanner/parser/app/example/test caller migration and complete resulting files. Text is approved and matching Rust is ready for combined review. All seven complete listings match; the documented native checks and all 75 tests pass locally. Ordinary scanner/parser/CLI outputs are unchanged. Appearance review belongs to the user.

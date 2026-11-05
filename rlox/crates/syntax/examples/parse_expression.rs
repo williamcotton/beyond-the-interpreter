@@ -1,4 +1,4 @@
-use rlox_syntax::parser::parse;
+use rlox_syntax::parser::{ParseFailure, parse};
 
 fn main() {
     for source in [
@@ -40,12 +40,13 @@ fn main() {
     ] {
         match parse(source) {
             Ok(expr) => println!("{source:?} => {}", expr.to_prefix()),
-            Err(error) => println!(
+            Err(ParseFailure::Syntax(error)) => println!(
                 "{source:?} => {} [{}..{})",
                 error.message,
-                error.range.start().0,
-                error.range.end().0,
+                usize::from(error.range.start()),
+                usize::from(error.range.end()),
             ),
+            Err(ParseFailure::SourceTooLarge(error)) => println!("{source:?} => {error}"),
         }
     }
 }

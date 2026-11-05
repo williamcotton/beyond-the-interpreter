@@ -1,32 +1,29 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TextSize(pub usize);
+use std::fmt;
+
+pub use rowan::{TextRange, TextSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TextRange {
-    start: TextSize,
-    end: TextSize,
+pub struct SourceTooLarge;
+
+impl fmt::Display for SourceTooLarge {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("source exceeds the 4,294,967,295-byte size limit")
+    }
 }
 
-impl TextRange {
-    pub fn new(start: TextSize, end: TextSize) -> Option<Self> {
-        if start.0 > end.0 {
-            return None;
-        }
+pub fn checked_size(bytes: usize) -> Result<TextSize, SourceTooLarge> {
+    TextSize::try_from(bytes).map_err(|_| SourceTooLarge)
+}
 
-        Some(Self { start, end })
+pub fn checked_range(start: TextSize, end: TextSize) -> Option<TextRange> {
+    if start > end {
+        return None;
     }
+    Some(TextRange::new(start, end))
+}
 
-    pub fn start(self) -> TextSize {
-        self.start
-    }
-
-    pub fn end(self) -> TextSize {
-        self.end
-    }
-
-    pub fn slice(self, source: &str) -> Option<&str> {
-        source.get(self.start.0..self.end.0)
-    }
+pub fn slice(source: &str, range: TextRange) -> Option<&str> {
+    source.get(usize::from(range.start())..usize::from(range.end()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,46 +37,48 @@ pub struct SyntaxOrigin {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileId, SyntaxOrigin, TextRange, TextSize};
+    use super::{
+        FileId, SourceTooLarge, SyntaxOrigin, TextSize, checked_range, checked_size, slice,
+    };
 
     #[test]
     fn selects_ascii_fragment() {
-        let word = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+        let word = checked_range(TextSize::new(0), TextSize::new(5)).expect("ordered range");
 
-        assert_eq!(word.slice("print 42;"), Some("print"));
+        assert_eq!(slice("print 42;", word), Some("print"));
     }
 
     #[test]
     fn rejects_reversed_range() {
-        assert_eq!(TextRange::new(TextSize(5), TextSize(0)), None);
+        assert_eq!(checked_range(TextSize::new(5), TextSize::new(0)), None);
     }
 
     #[test]
     fn respects_utf8_boundaries() {
         let source = "aé!";
-        let accent = TextRange::new(TextSize(1), TextSize(3)).expect("ordered range");
-        let split = TextRange::new(TextSize(1), TextSize(2)).expect("ordered range");
+        let accent = checked_range(TextSize::new(1), TextSize::new(3)).expect("ordered range");
+        let split = checked_range(TextSize::new(1), TextSize::new(2)).expect("ordered range");
 
-        assert_eq!(accent.slice(source), Some("é"));
-        assert_eq!(split.slice(source), None);
+        assert_eq!(slice(source, accent), Some("é"));
+        assert_eq!(slice(source, split), None);
     }
 
     #[test]
     fn checks_bounds_and_empty_ranges() {
         let source = "aé!";
-        let end = TextSize(source.len());
-        let eof = TextRange::new(end, end).expect("ordered range");
-        let beyond = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
-        let interior = TextRange::new(TextSize(2), TextSize(2)).expect("ordered range");
+        let end = checked_size(source.len()).expect("representable offset");
+        let eof = checked_range(end, end).expect("ordered range");
+        let beyond = checked_range(TextSize::new(0), TextSize::new(5)).expect("ordered range");
+        let interior = checked_range(TextSize::new(2), TextSize::new(2)).expect("ordered range");
 
-        assert_eq!(eof.slice(source), Some(""));
-        assert_eq!(beyond.slice(source), None);
-        assert_eq!(interior.slice(source), None);
+        assert_eq!(slice(source, eof), Some(""));
+        assert_eq!(slice(source, beyond), None);
+        assert_eq!(slice(source, interior), None);
     }
 
     #[test]
     fn same_range_in_different_files_has_different_origins() {
-        let range = TextRange::new(TextSize(0), TextSize(5)).expect("ordered range");
+        let range = checked_range(TextSize::new(0), TextSize::new(5)).expect("ordered range");
         let first = SyntaxOrigin {
             file: FileId(0),
             range,
@@ -99,7 +98,7 @@ mod tests {
         let second_source = "while (true) {}";
         let origin = SyntaxOrigin {
             file: FileId(1),
-            range: TextRange::new(TextSize(0), TextSize(5)).expect("ordered range"),
+            range: checked_range(TextSize::new(0), TextSize::new(5)).expect("ordered range"),
         };
 
         let source = match origin.file {
@@ -108,6 +107,15 @@ mod tests {
             _ => panic!("file ID was not assigned in this example"),
         };
 
-        assert_eq!(origin.range.slice(source), Some("while"));
+        assert_eq!(slice(source, origin.range), Some("while"));
+    }
+
+    #[test]
+    fn checks_capacity_without_allocating_source() {
+        let maximum = usize::try_from(u32::MAX).expect("u32 fits this target's usize");
+        assert_eq!(checked_size(maximum), Ok(TextSize::new(u32::MAX)));
+        if let Some(too_large) = maximum.checked_add(1) {
+            assert_eq!(checked_size(too_large), Err(SourceTooLarge));
+        }
     }
 }

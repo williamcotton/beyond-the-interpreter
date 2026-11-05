@@ -3,7 +3,7 @@ pub mod parser;
 
 use logos::Logos;
 
-use rlox_text::{TextRange, TextSize};
+use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size};
 
 #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyntaxKind {
@@ -96,7 +96,8 @@ pub struct Token {
     pub range: TextRange,
 }
 
-pub fn scan(source: &str) -> Vec<Token> {
+pub fn scan(source: &str) -> Result<Vec<Token>, SourceTooLarge> {
+    checked_size(source.len())?;
     let mut tokens = Vec::new();
 
     for (result, span) in SyntaxKind::lexer(source).spanned() {
@@ -104,42 +105,45 @@ pub fn scan(source: &str) -> Vec<Token> {
             Ok(kind) => kind,
             Err(()) => SyntaxKind::Error,
         };
-        let range = TextRange::new(TextSize(span.start), TextSize(span.end))
-            .expect("Logos spans are ordered");
+        let range = checked_range(
+            checked_size(span.start).expect("validated source length"),
+            checked_size(span.end).expect("validated source length"),
+        )
+        .expect("Logos spans are ordered");
 
         tokens.push(Token { kind, range });
     }
 
-    tokens
+    Ok(tokens)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{SyntaxKind, Token, scan};
-    use rlox_text::{TextRange, TextSize};
+    use rlox_text::{TextSize, checked_range, checked_size, slice};
 
     #[test]
     fn scans_single_character_tokens() {
-        let tokens = scan("()=!");
+        let tokens = scan("()=!").expect("small test source");
 
         assert_eq!(
             tokens,
             vec![
                 Token {
                     kind: SyntaxKind::LeftParen,
-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::RightParen,
-                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                    range: checked_range(TextSize::new(1), TextSize::new(2)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Equal,
-                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                    range: checked_range(TextSize::new(2), TextSize::new(3)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Bang,
-                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                    range: checked_range(TextSize::new(3), TextSize::new(4)).unwrap(),
                 },
             ]
         );
@@ -147,33 +151,33 @@ mod tests {
 
     #[test]
     fn empty_source_has_no_tokens() {
-        assert!(scan("").is_empty());
+        assert!(scan("").expect("small test source").is_empty());
     }
 
     #[test]
     fn consumes_a_whole_unsupported_character() {
         let source = "é!";
-        let tokens = scan(source);
+        let tokens = scan(source).expect("small test source");
 
         assert_eq!(tokens.len(), 2);
         assert_eq!(tokens[0].kind, SyntaxKind::Error);
-        assert_eq!(tokens[0].range.slice(source), Some("é"));
+        assert_eq!(slice(source, tokens[0].range), Some("é"));
         assert_eq!(tokens[1].kind, SyntaxKind::Bang);
-        assert_eq!(tokens[1].range.slice(source), Some("!"));
+        assert_eq!(slice(source, tokens[1].range), Some("!"));
     }
 
     #[test]
     fn scans_adjacent_paired_operators() {
         assert_eq!(
-            scan("!==="),
+            scan("!===").expect("small test source"),
             vec![
                 Token {
                     kind: SyntaxKind::BangEqual,
-                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::EqualEqual,
-                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
                 },
             ]
         );
@@ -182,19 +186,19 @@ mod tests {
     #[test]
     fn failed_lookahead_preserves_the_next_character() {
         assert_eq!(
-            scan("!é("),
+            scan("!é(").expect("small test source"),
             vec![
                 Token {
                     kind: SyntaxKind::Bang,
-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Error,
-                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                    range: checked_range(TextSize::new(1), TextSize::new(3)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::LeftParen,
-                    range: TextRange::new(TextSize(3), TextSize(4)).unwrap(),
+                    range: checked_range(TextSize::new(3), TextSize::new(4)).unwrap(),
                 },
             ]
         );
@@ -204,10 +208,10 @@ mod tests {
     fn single_operator_can_end_the_source() {
         for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
             assert_eq!(
-                scan(source),
+                scan(source).expect("small test source"),
                 vec![Token {
                     kind,
-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
                 }]
             );
         }
@@ -216,19 +220,19 @@ mod tests {
     #[test]
     fn identifiers_stop_before_operators() {
         assert_eq!(
-            scan("a_2!=other"),
+            scan("a_2!=other").expect("small test source"),
             vec![
                 Token {
                     kind: SyntaxKind::Identifier,
-                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::BangEqual,
-                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+                    range: checked_range(TextSize::new(3), TextSize::new(5)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Identifier,
-                    range: TextRange::new(TextSize(5), TextSize(10)).unwrap(),
+                    range: checked_range(TextSize::new(5), TextSize::new(10)).unwrap(),
                 },
             ]
         );
@@ -238,10 +242,14 @@ mod tests {
     fn identifiers_can_end_the_source() {
         for source in ["_", "A9", "printer"] {
             assert_eq!(
-                scan(source),
+                scan(source).expect("small test source"),
                 vec![Token {
                     kind: SyntaxKind::Identifier,
-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
                 }]
             );
         }
@@ -250,23 +258,23 @@ mod tests {
     #[test]
     fn number_and_name_boundaries_preserve_unknown_characters() {
         assert_eq!(
-            scan("2aé_b"),
+            scan("2aé_b").expect("small test source"),
             vec![
                 Token {
                     kind: SyntaxKind::Number,
-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Identifier,
-                    range: TextRange::new(TextSize(1), TextSize(2)).unwrap(),
+                    range: checked_range(TextSize::new(1), TextSize::new(2)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Error,
-                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Identifier,
-                    range: TextRange::new(TextSize(4), TextSize(6)).unwrap(),
+                    range: checked_range(TextSize::new(4), TextSize::new(6)).unwrap(),
                 },
             ]
         );
@@ -275,27 +283,27 @@ mod tests {
     #[test]
     fn keeps_whitespace_between_tokens() {
         assert_eq!(
-            scan("a \t\r\n!= b"),
+            scan("a \t\r\n!= b").expect("small test source"),
             vec![
                 Token {
                     kind: SyntaxKind::Identifier,
-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Whitespace,
-                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+                    range: checked_range(TextSize::new(1), TextSize::new(5)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::BangEqual,
-                    range: TextRange::new(TextSize(5), TextSize(7)).unwrap(),
+                    range: checked_range(TextSize::new(5), TextSize::new(7)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Whitespace,
-                    range: TextRange::new(TextSize(7), TextSize(8)).unwrap(),
+                    range: checked_range(TextSize::new(7), TextSize::new(8)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Identifier,
-                    range: TextRange::new(TextSize(8), TextSize(9)).unwrap(),
+                    range: checked_range(TextSize::new(8), TextSize::new(9)).unwrap(),
                 },
             ]
         );
@@ -305,10 +313,14 @@ mod tests {
     fn whitespace_uses_the_lox_character_set() {
         for source in ["\u{000b}", "\u{000c}", "\u{00a0}"] {
             assert_eq!(
-                scan(source),
+                scan(source).expect("small test source"),
                 vec![Token {
                     kind: SyntaxKind::Error,
-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
                 }]
             );
         }
@@ -356,11 +368,15 @@ mod tests {
             let mut offset = 0;
             let mut reconstructed = String::new();
 
-            for token in scan(source) {
-                let text = token.range.slice(source).expect("valid UTF-8 source slice");
+            for token in scan(source).expect("small test source") {
+                let text = slice(source, token.range).expect("valid UTF-8 source slice");
                 assert!(!text.is_empty());
                 let end = offset + text.len();
-                let expected = TextRange::new(TextSize(offset), TextSize(end)).unwrap();
+                let expected = checked_range(
+                    checked_size(offset).expect("representable offset"),
+                    checked_size(end).expect("representable offset"),
+                )
+                .unwrap();
                 assert_eq!(token.range, expected);
 
                 reconstructed.push_str(text);
@@ -375,22 +391,22 @@ mod tests {
     #[test]
     fn recognizes_single_slashes() {
         assert_eq!(
-            scan("/"),
+            scan("/").expect("small test source"),
             vec![Token {
                 kind: SyntaxKind::Slash,
-                range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
             }]
         );
         assert_eq!(
-            scan("/name"),
+            scan("/name").expect("small test source"),
             vec![
                 Token {
                     kind: SyntaxKind::Slash,
-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Identifier,
-                    range: TextRange::new(TextSize(1), TextSize(5)).unwrap(),
+                    range: checked_range(TextSize::new(1), TextSize::new(5)).unwrap(),
                 },
             ]
         );
@@ -399,19 +415,19 @@ mod tests {
     #[test]
     fn line_comments_leave_the_line_feed_unread() {
         assert_eq!(
-            scan("//é\r\nname"),
+            scan("//é\r\nname").expect("small test source"),
             vec![
                 Token {
                     kind: SyntaxKind::LineComment,
-                    range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(5)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Whitespace,
-                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Identifier,
-                    range: TextRange::new(TextSize(6), TextSize(10)).unwrap(),
+                    range: checked_range(TextSize::new(6), TextSize::new(10)).unwrap(),
                 },
             ]
         );
@@ -421,10 +437,14 @@ mod tests {
     fn line_comments_can_end_at_eof() {
         for source in ["//", "//é", "///"] {
             assert_eq!(
-                scan(source),
+                scan(source).expect("small test source"),
                 vec![Token {
                     kind: SyntaxKind::LineComment,
-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
                 }]
             );
         }
@@ -433,19 +453,19 @@ mod tests {
     #[test]
     fn unknown_characters_remain_separate_tokens() {
         assert_eq!(
-            scan("@é💥"),
+            scan("@é💥").expect("small test source"),
             vec![
                 Token {
                     kind: SyntaxKind::Error,
-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Error,
-                    range: TextRange::new(TextSize(1), TextSize(3)).unwrap(),
+                    range: checked_range(TextSize::new(1), TextSize::new(3)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Error,
-                    range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
+                    range: checked_range(TextSize::new(3), TextSize::new(7)).unwrap(),
                 },
             ]
         );
@@ -466,10 +486,10 @@ mod tests {
             (">", SyntaxKind::Greater),
         ] {
             assert_eq!(
-                scan(source),
+                scan(source).expect("small test source"),
                 vec![Token {
                     kind,
-                    range: TextRange::new(TextSize(0), TextSize(1)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
                 }]
             );
         }
@@ -478,23 +498,23 @@ mod tests {
     #[test]
     fn recognizes_adjacent_comparison_operators() {
         assert_eq!(
-            scan("<=>=<>"),
+            scan("<=>=<>").expect("small test source"),
             vec![
                 Token {
                     kind: SyntaxKind::LessEqual,
-                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::GreaterEqual,
-                    range: TextRange::new(TextSize(2), TextSize(4)).unwrap(),
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Less,
-                    range: TextRange::new(TextSize(4), TextSize(5)).unwrap(),
+                    range: checked_range(TextSize::new(4), TextSize::new(5)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Greater,
-                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
                 },
             ]
         );
@@ -503,23 +523,23 @@ mod tests {
     #[test]
     fn comparison_pairs_leave_extra_equals_tokens() {
         assert_eq!(
-            scan("<==>=="),
+            scan("<==>==").expect("small test source"),
             vec![
                 Token {
                     kind: SyntaxKind::LessEqual,
-                    range: TextRange::new(TextSize(0), TextSize(2)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Equal,
-                    range: TextRange::new(TextSize(2), TextSize(3)).unwrap(),
+                    range: checked_range(TextSize::new(2), TextSize::new(3)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::GreaterEqual,
-                    range: TextRange::new(TextSize(3), TextSize(5)).unwrap(),
+                    range: checked_range(TextSize::new(3), TextSize::new(5)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Equal,
-                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
                 },
             ]
         );
@@ -546,10 +566,14 @@ mod tests {
             ("while", SyntaxKind::While),
         ] {
             assert_eq!(
-                scan(source),
+                scan(source).expect("small test source"),
                 vec![Token {
                     kind,
-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
                 }]
             );
         }
@@ -566,10 +590,14 @@ mod tests {
             "Print",
         ] {
             assert_eq!(
-                scan(source),
+                scan(source).expect("small test source"),
                 vec![Token {
                     kind: SyntaxKind::Identifier,
-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
                 }]
             );
         }
@@ -578,42 +606,46 @@ mod tests {
     #[test]
     fn token_spelling_comes_from_the_source() {
         let source = "print printer";
-        let tokens = scan(source);
+        let tokens = scan(source).expect("small test source");
 
         assert_eq!(
             tokens,
             vec![
                 Token {
                     kind: SyntaxKind::Print,
-                    range: TextRange::new(TextSize(0), TextSize(5)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(5)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Whitespace,
-                    range: TextRange::new(TextSize(5), TextSize(6)).unwrap(),
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Identifier,
-                    range: TextRange::new(TextSize(6), TextSize(13)).unwrap(),
+                    range: checked_range(TextSize::new(6), TextSize::new(13)).unwrap(),
                 },
             ]
         );
-        assert_eq!(tokens[0].range.slice(source), Some("print"));
-        assert_eq!(tokens[1].range.slice(source), Some(" "));
-        assert_eq!(tokens[2].range.slice(source), Some("printer"));
+        assert_eq!(slice(source, tokens[0].range), Some("print"));
+        assert_eq!(slice(source, tokens[1].range), Some(" "));
+        assert_eq!(slice(source, tokens[2].range), Some("printer"));
     }
 
     #[test]
     fn recognizes_number_spellings() {
         for source in ["0", "123", "001", "0.5", "123.456", "00.50"] {
-            let tokens = scan(source);
+            let tokens = scan(source).expect("small test source");
             assert_eq!(
                 tokens,
                 vec![Token {
                     kind: SyntaxKind::Number,
-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
                 }]
             );
-            assert_eq!(tokens[0].range.slice(source), Some(source));
+            assert_eq!(slice(source, tokens[0].range), Some(source));
         }
     }
 
@@ -650,13 +682,17 @@ mod tests {
             ),
             ("a2", vec![(SyntaxKind::Identifier, 0, 2)]),
         ] {
-            let tokens = scan(source);
+            let tokens = scan(source).expect("small test source");
             assert_eq!(tokens.len(), expected.len(), "{source}");
             for (token, (kind, start, end)) in tokens.iter().zip(expected) {
                 assert_eq!(token.kind, kind, "{source}");
                 assert_eq!(
                     token.range,
-                    TextRange::new(TextSize(start), TextSize(end)).unwrap(),
+                    checked_range(
+                        checked_size(start).expect("representable offset"),
+                        checked_size(end).expect("representable offset")
+                    )
+                    .unwrap(),
                     "{source}"
                 );
             }
@@ -673,56 +709,60 @@ mod tests {
             "\"first\nsecond\"",
             r#""\n""#,
         ] {
-            let tokens = scan(source);
+            let tokens = scan(source).expect("small test source");
             assert_eq!(
                 tokens,
                 vec![Token {
                     kind: SyntaxKind::String,
-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
                 }]
             );
-            assert_eq!(tokens[0].range.slice(source), Some(source));
+            assert_eq!(slice(source, tokens[0].range), Some(source));
         }
     }
 
     #[test]
     fn strings_stop_at_the_next_quote() {
         let source = r#""a""b";"#;
-        let tokens = scan(source);
+        let tokens = scan(source).expect("small test source");
         assert_eq!(
             tokens,
             vec![
                 Token {
                     kind: SyntaxKind::String,
-                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::String,
-                    range: TextRange::new(TextSize(3), TextSize(6)).unwrap(),
+                    range: checked_range(TextSize::new(3), TextSize::new(6)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Semicolon,
-                    range: TextRange::new(TextSize(6), TextSize(7)).unwrap(),
+                    range: checked_range(TextSize::new(6), TextSize::new(7)).unwrap(),
                 },
             ]
         );
-        assert_eq!(tokens[0].range.slice(source), Some(r#""a""#));
-        assert_eq!(tokens[1].range.slice(source), Some(r#""b""#));
+        assert_eq!(slice(source, tokens[0].range), Some(r#""a""#));
+        assert_eq!(slice(source, tokens[1].range), Some(r#""b""#));
     }
 
     #[test]
     fn backslash_does_not_escape_a_quote() {
         let source = r#""\"name"#;
         assert_eq!(
-            scan(source),
+            scan(source).expect("small test source"),
             vec![
                 Token {
                     kind: SyntaxKind::String,
-                    range: TextRange::new(TextSize(0), TextSize(3)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Identifier,
-                    range: TextRange::new(TextSize(3), TextSize(7)).unwrap(),
+                    range: checked_range(TextSize::new(3), TextSize::new(7)).unwrap(),
                 },
             ]
         );
@@ -731,27 +771,31 @@ mod tests {
     #[test]
     fn unterminated_strings_cover_the_remaining_source() {
         for source in ["\"", "\"é", "\"first\n// still inside"] {
-            let tokens = scan(source);
+            let tokens = scan(source).expect("small test source");
             assert_eq!(
                 tokens,
                 vec![Token {
                     kind: SyntaxKind::Error,
-                    range: TextRange::new(TextSize(0), TextSize(source.len())).unwrap(),
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
                 }]
             );
-            assert_eq!(tokens[0].range.slice(source), Some(source));
+            assert_eq!(slice(source, tokens[0].range), Some(source));
         }
 
         assert_eq!(
-            scan(r#""ok""é"#),
+            scan(r#""ok""é"#).expect("small test source"),
             vec![
                 Token {
                     kind: SyntaxKind::String,
-                    range: TextRange::new(TextSize(0), TextSize(4)).unwrap(),
+                    range: checked_range(TextSize::new(0), TextSize::new(4)).unwrap(),
                 },
                 Token {
                     kind: SyntaxKind::Error,
-                    range: TextRange::new(TextSize(4), TextSize(7)).unwrap(),
+                    range: checked_range(TextSize::new(4), TextSize::new(7)).unwrap(),
                 },
             ]
         );

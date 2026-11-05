@@ -2,6 +2,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use rlox_syntax::{SyntaxKind, scan};
+use rlox_text::slice;
 
 #[derive(Parser)]
 #[command(name = "rlox", about = "Inspect Lox source files")]
@@ -39,20 +40,24 @@ fn main() -> ExitCode {
     match command {
         Command::Source { .. } => print!("{source}"),
         Command::Tokens { .. } => {
+            let tokens = match scan(&source) {
+                Ok(tokens) => tokens,
+                Err(error) => {
+                    eprintln!("rlox: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
             let mut had_error = false;
-            for token in scan(&source) {
+            for token in tokens {
                 if token.kind == SyntaxKind::Error {
                     had_error = true;
                 }
-                let spelling = token
-                    .range
-                    .slice(&source)
-                    .expect("scanner ranges are valid");
+                let spelling = slice(&source, token.range).expect("scanner ranges are valid");
                 println!(
                     "{:?} [{}..{}) {:?}",
                     token.kind,
-                    token.range.start().0,
-                    token.range.end().0,
+                    usize::from(token.range.start()),
+                    usize::from(token.range.end()),
                     spelling
                 );
             }

@@ -101,6 +101,12 @@ export default defineConfig({
             { label: '11.5 · Put addition around multiplication', link: '/chapter-11/11.5-parse-terms/' },
           ],
         },
+        {
+          label: 'Chapter 12 · Building Lossless Trees with Rowan',
+          items: [
+            { label: '12.1 · Use Rowan-compatible text coordinates', link: '/chapter-12/12.1-rowan-coordinates/' },
+          ],
+        },
       ],
       customCss: ['./src/styles/book.css'],
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },

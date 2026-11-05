@@ -1,4 +1,4 @@
-use rlox_text::{TextRange, TextSize};
+use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size, slice};
 
 use crate::expr::{BinaryOp, Expr, UnaryOp};
 use crate::{SyntaxKind, Token, scan};
@@ -9,6 +9,12 @@ const MAX_NESTING: usize = 64;
 pub struct ParseError {
     pub message: String,
     pub range: TextRange,
+}
+
+#[derive(Debug)]
+pub enum ParseFailure {
+    SourceTooLarge(SourceTooLarge),
+    Syntax(ParseError),
 }
 
 fn error_at(token: Token, message: &str) -> ParseError {
@@ -32,11 +38,11 @@ fn tree_height(expr: &Expr) -> usize {
     }
 }
 
-pub fn parse(source: &str) -> Result<Expr, ParseError> {
-    let mut parser = Parser::new(source);
-    let expr = parser.expression(0)?;
+pub fn parse(source: &str) -> Result<Expr, ParseFailure> {
+    let mut parser = Parser::new(source).map_err(ParseFailure::SourceTooLarge)?;
+    let expr = parser.expression(0).map_err(ParseFailure::Syntax)?;
     if parser.peek().is_some() {
-        return Err(parser.error("expected end of input"));
+        return Err(ParseFailure::Syntax(parser.error("expected end of input")));
     }
     Ok(expr)
 }
@@ -48,16 +54,16 @@ struct Parser<'src> {
 }
 
 impl<'src> Parser<'src> {
-    fn new(source: &'src str) -> Self {
-        let mut tokens = scan(source);
+    fn new(source: &'src str) -> Result<Self, SourceTooLarge> {
+        let mut tokens = scan(source)?;
         tokens.retain(|token| {
             !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::LineComment)
         });
-        Self {
+        Ok(Self {
             source,
             tokens,
             current: 0,
-        }
+        })
     }
 
     fn expression(&mut self, nesting: usize) -> Result<Expr, ParseError> {
@@ -167,10 +173,7 @@ impl<'src> Parser<'src> {
             return Err(self.error("expected a number"));
         }
 
-        let spelling = token
-            .range
-            .slice(self.source)
-            .expect("scanner ranges are valid");
+        let spelling = slice(self.source, token.range).expect("scanner ranges are valid");
         let value = spelling
             .parse::<f64>()
             .map_err(|_| error_at(token, "invalid number"))?;
@@ -190,10 +193,10 @@ impl<'src> Parser<'src> {
         match self.peek() {
             Some(token) => error_at(token, message),
             None => {
-                let end = TextSize(self.source.len());
+                let end = checked_size(self.source.len()).expect("validated source length");
                 ParseError {
                     message: message.to_owned(),
-                    range: TextRange::new(end, end).expect("ordered EOF range"),
+                    range: checked_range(end, end).expect("ordered EOF range"),
                 }
             }
         }
@@ -202,7 +205,14 @@ impl<'src> Parser<'src> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_NESTING, parse};
+    use super::{MAX_NESTING, ParseError, ParseFailure, parse};
+
+    fn syntax_error(source: &str) -> ParseError {
+        match parse(source) {
+            Err(ParseFailure::Syntax(error)) => error,
+            other => panic!("expected a syntax error, got {other:?}"),
+        }
+    }
 
     #[test]
     fn parses_number_spellings_and_surrounding_trivia() {
@@ -220,36 +230,36 @@ mod tests {
     #[test]
     fn missing_expression_points_to_source_end() {
         for source in ["", " \t\n", " // é\n"] {
-            let error = parse(source).unwrap_err();
+            let error = syntax_error(source);
             assert_eq!(error.message, "expected an expression");
-            assert_eq!(error.range.start().0, source.len());
-            assert_eq!(error.range.end().0, source.len());
+            assert_eq!(usize::from(error.range.start()), source.len());
+            assert_eq!(usize::from(error.range.end()), source.len());
         }
     }
 
     #[test]
     fn rejects_a_second_number() {
-        let error = parse("123 456").unwrap_err();
+        let error = syntax_error("123 456");
         assert_eq!(error.message, "expected end of input");
-        assert_eq!(error.range.start().0, 4);
-        assert_eq!(error.range.end().0, 7);
+        assert_eq!(usize::from(error.range.start()), 4);
+        assert_eq!(usize::from(error.range.end()), 7);
     }
 
     #[test]
     fn rejects_an_unexpected_token_kind() {
-        let error = parse("hello").unwrap_err();
+        let error = syntax_error("hello");
         assert_eq!(error.message, "expected an expression");
-        assert_eq!(error.range.start().0, 0);
-        assert_eq!(error.range.end().0, 5);
+        assert_eq!(usize::from(error.range.start()), 0);
+        assert_eq!(usize::from(error.range.end()), 5);
     }
 
     #[test]
     fn retains_lexical_errors_and_utf8_ranges() {
         for (source, start, end) in [("é", 0, 2), ("123 é", 4, 6)] {
-            let error = parse(source).unwrap_err();
+            let error = syntax_error(source);
             assert_eq!(error.message, "invalid token");
-            assert_eq!(error.range.start().0, start);
-            assert_eq!(error.range.end().0, end);
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
         }
     }
 
@@ -268,33 +278,33 @@ mod tests {
     fn reports_missing_closing_parentheses() {
         for (source, start, end) in [("(123", 4, 4), ("(123 456)", 5, 8), ("(123 // é\n", 11, 11)]
         {
-            let error = parse(source).unwrap_err();
+            let error = syntax_error(source);
             assert_eq!(error.message, "expected ')'");
-            assert_eq!(error.range.start().0, start);
-            assert_eq!(error.range.end().0, end);
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
         }
     }
 
     #[test]
     fn rejects_empty_groups_and_trailing_closes() {
-        let empty = parse("()").unwrap_err();
+        let empty = syntax_error("()");
         assert_eq!(empty.message, "expected an expression");
-        assert_eq!(empty.range.start().0, 1);
-        assert_eq!(empty.range.end().0, 2);
+        assert_eq!(usize::from(empty.range.start()), 1);
+        assert_eq!(usize::from(empty.range.end()), 2);
 
-        let extra = parse("123)").unwrap_err();
+        let extra = syntax_error("123)");
         assert_eq!(extra.message, "expected end of input");
-        assert_eq!(extra.range.start().0, 3);
-        assert_eq!(extra.range.end().0, 4);
+        assert_eq!(usize::from(extra.range.start()), 3);
+        assert_eq!(usize::from(extra.range.end()), 4);
     }
 
     #[test]
     fn retains_lexical_errors_inside_groups() {
         for (source, start, end) in [("(é)", 1, 3), ("(123 é)", 5, 7)] {
-            let error = parse(source).unwrap_err();
+            let error = syntax_error(source);
             assert_eq!(error.message, "invalid token");
-            assert_eq!(error.range.start().0, start);
-            assert_eq!(error.range.end().0, end);
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
         }
     }
 
@@ -312,10 +322,10 @@ mod tests {
         );
 
         let too_deep = format!("({at_limit})");
-        let error = parse(&too_deep).unwrap_err();
+        let error = syntax_error(&too_deep);
         assert_eq!(error.message, "expression nesting limit exceeded");
-        assert_eq!(error.range.start().0, MAX_NESTING);
-        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+        assert_eq!(usize::from(error.range.start()), MAX_NESTING);
+        assert_eq!(usize::from(error.range.end()), MAX_NESTING + 1);
     }
 
     #[test]
@@ -341,10 +351,10 @@ mod tests {
             ("-123)", "expected end of input", 4, 5),
             ("(-123", "expected ')'", 5, 5),
         ] {
-            let error = parse(source).unwrap_err();
+            let error = syntax_error(source);
             assert_eq!(error.message, message, "{source:?}");
-            assert_eq!(error.range.start().0, start);
-            assert_eq!(error.range.end().0, end);
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
         }
     }
 
@@ -357,10 +367,10 @@ mod tests {
             format!("{}1{}", "(- ".repeat(MAX_NESTING), ")".repeat(MAX_NESTING))
         );
 
-        let error = parse(&format!("-{at_limit}")).unwrap_err();
+        let error = syntax_error(&format!("-{at_limit}"));
         assert_eq!(error.message, "expression nesting limit exceeded");
-        assert_eq!(error.range.start().0, MAX_NESTING);
-        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+        assert_eq!(usize::from(error.range.start()), MAX_NESTING);
+        assert_eq!(usize::from(error.range.end()), MAX_NESTING + 1);
     }
 
     #[test]
@@ -390,10 +400,10 @@ mod tests {
             "-".repeat(signs + 1),
             ")".repeat(groups)
         );
-        let error = parse(&too_deep).unwrap_err();
+        let error = syntax_error(&too_deep);
         assert_eq!(error.message, "expression nesting limit exceeded");
-        assert_eq!(error.range.start().0, MAX_NESTING);
-        assert_eq!(error.range.end().0, MAX_NESTING + 1);
+        assert_eq!(usize::from(error.range.start()), MAX_NESTING);
+        assert_eq!(usize::from(error.range.end()), MAX_NESTING + 1);
     }
 
     #[test]
@@ -419,10 +429,10 @@ mod tests {
             ("(8 /)", "expected an expression", 4, 5),
             ("8 / 2 3", "expected end of input", 6, 7),
         ] {
-            let error = parse(source).unwrap_err();
+            let error = syntax_error(source);
             assert_eq!(error.message, message, "{source:?}");
-            assert_eq!(error.range.start().0, start);
-            assert_eq!(error.range.end().0, end);
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
         }
     }
 
@@ -439,11 +449,11 @@ mod tests {
             )
         );
 
-        let error = parse(&format!("{at_limit} * 1")).unwrap_err();
+        let error = syntax_error(&format!("{at_limit} * 1"));
         let operator = 2 + 4 * MAX_NESTING;
         assert_eq!(error.message, "expression nesting limit exceeded");
-        assert_eq!(error.range.start().0, operator);
-        assert_eq!(error.range.end().0, operator + 1);
+        assert_eq!(usize::from(error.range.start()), operator);
+        assert_eq!(usize::from(error.range.end()), operator + 1);
     }
 
     #[test]
@@ -458,10 +468,10 @@ mod tests {
             (format!("{signs}1 * 1"), MAX_NESTING + 2),
             (format!("1 * {signs}1"), 2),
         ] {
-            let error = parse(&source).unwrap_err();
+            let error = syntax_error(&source);
             assert_eq!(error.message, "expression nesting limit exceeded");
-            assert_eq!(error.range.start().0, operator);
-            assert_eq!(error.range.end().0, operator + 1);
+            assert_eq!(usize::from(error.range.start()), operator);
+            assert_eq!(usize::from(error.range.end()), operator + 1);
         }
     }
 
@@ -471,11 +481,11 @@ mod tests {
         assert!(parse(&at_limit).is_ok());
 
         let too_deep = format!("(1{})", " * 1".repeat(MAX_NESTING));
-        let error = parse(&too_deep).unwrap_err();
+        let error = syntax_error(&too_deep);
         let operator = 3 + 4 * (MAX_NESTING - 1);
         assert_eq!(error.message, "expression nesting limit exceeded");
-        assert_eq!(error.range.start().0, operator);
-        assert_eq!(error.range.end().0, operator + 1);
+        assert_eq!(usize::from(error.range.start()), operator);
+        assert_eq!(usize::from(error.range.end()), operator + 1);
     }
 
     #[test]
@@ -504,10 +514,10 @@ mod tests {
             ("1 + 2 3", "expected end of input", 6, 7),
             ("1 + (2 * )", "expected an expression", 9, 10),
         ] {
-            let error = parse(source).unwrap_err();
+            let error = syntax_error(source);
             assert_eq!(error.message, message, "{source:?}");
-            assert_eq!(error.range.start().0, start);
-            assert_eq!(error.range.end().0, end);
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
         }
     }
 
@@ -531,11 +541,11 @@ mod tests {
             )
         );
 
-        let error = parse(&format!("{at_limit} + 1")).unwrap_err();
+        let error = syntax_error(&format!("{at_limit} + 1"));
         let operator = 2 + 4 * MAX_NESTING;
         assert_eq!(error.message, "expression nesting limit exceeded");
-        assert_eq!(error.range.start().0, operator);
-        assert_eq!(error.range.end().0, operator + 1);
+        assert_eq!(usize::from(error.range.start()), operator);
+        assert_eq!(usize::from(error.range.end()), operator + 1);
     }
 
     #[test]
@@ -557,10 +567,10 @@ mod tests {
             (format!("1 + 1{factors}"), 2),
             (format!("(1{sums})"), 3 + 4 * (MAX_NESTING - 1)),
         ] {
-            let error = parse(&source).unwrap_err();
+            let error = syntax_error(&source);
             assert_eq!(error.message, "expression nesting limit exceeded");
-            assert_eq!(error.range.start().0, operator);
-            assert_eq!(error.range.end().0, operator + 1);
+            assert_eq!(usize::from(error.range.start()), operator);
+            assert_eq!(usize::from(error.range.end()), operator + 1);
         }
     }
 }
