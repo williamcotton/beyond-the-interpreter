@@ -13,19 +13,20 @@ fn main() {
         "-",
         "(-)",
         "-é",
+        "8 / 4 / 2",
+        "8 / (4 / 2)",
+        "1 + 2 * 3",
+        "(1 + 2) * 3",
+        "8 - 3 - 1",
+        "-(1 + 2) * 3",
+        "1 +",
+        "1 + é",
+        " 001.0 // first\n + 02.00 * 3",
     ] {
         match parse(source) {
             Ok(parsed) => {
                 println!("source: {source:?}");
-                for child in parsed.root.children_with_tokens() {
-                    println!(
-                        "  {:?} [{}..{}) {:?}",
-                        child.kind(),
-                        usize::from(child.text_range().start()),
-                        usize::from(child.text_range().end()),
-                        child.to_string()
-                    );
-                }
+                print!("{:#?}", parsed.root);
                 for error in parsed.errors {
                     println!(
                         "error: {} [{}..{})",

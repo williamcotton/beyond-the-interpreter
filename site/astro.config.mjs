@@ -108,6 +108,7 @@ export default defineConfig({
             { label: '12.2 · Keep every token in a small syntax tree', link: '/chapter-12/12.2-lossless-tree/' },
             { label: '12.3 · Parse numbers and groups without dropping source', link: '/chapter-12/12.3-lossless-groups/' },
             { label: '12.4 · Keep unary operators in the tree', link: '/chapter-12/12.4-lossless-unary/' },
+            { label: '12.5 · Wrap infix expressions with builder checkpoints', link: '/chapter-12/12.5-lossless-infix/' },
           ],
         },
       ],

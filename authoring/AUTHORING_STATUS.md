@@ -1,6 +1,6 @@
 # Authoring status
 
-Last updated: 2026-11-04. This file records actual state and decisions, not future assignments. Read the [current brief](LESSON_BRIEF.md) for authorized work and the [roadmap](PROJECT_OUTLINE.md) for chapter coverage.
+Last updated: 2026-11-05. This file records actual state and decisions, not future assignments. Read the [current brief](LESSON_BRIEF.md) for authorized work and the [roadmap](PROJECT_OUTLINE.md) for chapter coverage.
 
 ## Accepted work
 
@@ -922,3 +922,29 @@ Committed/pushed as `1500db7` (`feat: pair section 9.5 with extension ci checks`
 **Handoff/limits:** [12.4](../site/src/content/docs/chapter-12/12.4-lossless-unary.mdx) and matching rlox ready for combined review. Prior publication/reference/navigation checks apply; manuscript/components/navigation unchanged during implementation, so no repeated site suite. Appearance belongs to user; no screenshots/browser visual review. Local native evidence only, with no new hosted/minimum-compiler/other-platform/oversized-file claim. No new framework, commit/push or later work. Await acceptance/instruction.
 
 **CH12-04 acceptance:** User said “ok great, commit and let’s move on to section 12.5”, accepting the combined unary endpoint and authorizing its commit followed by 12.5 text only. No push.
+
+## CH12-05 — Wrap infix expressions with builder checkpoints
+
+**Authorization/commit:** User accepted 12.4 and requested its commit then 12.5. Accepted unary pair committed as b69586c (`feat: pair section 12.4 with lossless unary parsing`); no push. Only 12.5 text authorized.
+
+**Status/deliverable:** Ready for text/scope review at [12.5 manuscript](../site/src/content/docs/chapter-12/12.5-lossless-infix.mdx), served at <http://localhost:4321/chapter-12/12.5-lossless-infix/>. Ordered height/lookahead/kind/factor/delegation/term/example/test edits, three complete views, static checkpoint/height traces and arithmetic comparison. Previous-next/sidebar/orientation updated. Rust remains accepted 12.4 (87 tests last verified); no implementation ahead.
+
+**Scope/decisions:** Add BinaryExpr and non-emitting trivia-skipping lookahead; return usize subtree heights from grammar methods without retaining another AST. Checkpoint after leading trivia, parse operands in factor then term, check 1+max(left,right) plus ancestor nesting before wrapping. Save operator token for height error range. Defer wrapping until right success/budget acceptance, so failed spans remain emitted siblings; enclosing unary/groups still close and root suffix drain retains remaining text. No fabricated operands or local recovery. Preserve source/trivia ownership/public contracts and 64-node-path meaning. Example switches to Rowan pretty Debug to expose descendants; retire only obsolete 1+2 failure assertion. New test-only readable projection checks complete structures without parsing/evaluation or another AST. No generic event/operator framework, typed views, new dependency/crate/module, CLI/extension/workflow or 12.6 work.
+
+**Visual/evidence:** LosslessTree arithmetic mode has four fixed precedence/grouping/left-association/spelling-comment examples. Scanner leaves and owned AST values agree with accepted native output; node structures are authored to the displayed rules and await native verification after approval. No JS parser. Default 12.2 token mode preserves byte-identical initial SSR in a hook-state harness. Both modes, six sample choices and 77 selections execute expected UTF-8 highlighting; SSR fallback/live descriptions present. No browser hydration/appearance review or screenshot; user owns appearance.
+
+**Text checks/limits:** Ordered displayed route reconstructs all three complete views in memory; stdin rustfmt and shell syntax pass. Four primary URL/anchors resolve. Installed pinned Rowan source confirms checkpoint Copy and parent/child-boundary behavior. Fixture hierarchy bounds, native leaf/AST observations and authored operator error offsets checked. Site check zero errors/warnings/hints; build succeeds with 44 pages including 404 and existing notices. New 12.5, affected 12.4 and default comparison 12.2 return HTTP 200; 198 rendered local links/anchors resolve. Native/workflow and accepted 12.4 body unchanged. Future CST compilation/budget/recovery/example/fixture behavior remains provisional; no future Rust generated or compiled/tested, dependency install/resolution, new validation framework, extra commit/push or later draft.
+
+**Next permitted action:** Human text/scope review, especially checkpoint/trivia placement, height propagation and deferred wrapping/pacing. Await approval and authorization before following/compiling the displayed route. Native pass must verify factor-only endpoint, final examples/tests and every arithmetic fixture's CST shape/parent/range.
+
+### CH12-05 implementation verification
+
+**Authorization/status:** User approved text with “ok, looks good, now update rlox”. Matching implementation and ordered reader route ready for combined review; final acceptance pending. No commit/push or 12.6 authorized.
+
+**Executed route:** Confirmed accepted b69586c source and captured owned arithmetic/CLI/token_tree baselines. Applied displayed height, lookahead, kind, factor and multiplicative-entry edits in order. All-target workspace check passed at the documented factor-only endpoint. Added term/additive entry, updated example and ran it with the exact displayed precedence tree. Added test import, removed obsolete additive-failure case and appended projection/tests. Automated line deletion left one empty line, corrected to match complete listing before final formatting. Formatting, all-target Clippy with warnings denied, workspace tests and owned arithmetic inspector pass. Three files match complete listings exactly; no manuscript or logic correction, hidden implementation change or dependency update.
+
+**Observed evidence:** All 92 tests pass locally on macOS ARM64/Rust 1.95.0: 6 app, 6 process, 73 syntax, 7 text. Cases cover precedence/left association/owned parity/Chapter 10 shape, raw spelling/source/trivia boundaries, partial input/UTF-8 errors, both binary folds at 64/65, both operand heights and ancestor unary/group budgets. Native pretty Debug precedence tree matches manuscript. Disposable native inspector verifies all four comparison AST values and all 66 CST entries/kinds/parents/depths/exact text/ranges; removed afterward. Fixture provenance comment updated, data/controls unchanged. All 35 original arithmetic observations, token CLI streams/status and token_tree output match captured baselines. Three complete views and diff whitespace check pass. Owned parser/Expr/tree, manifests/lockfile, app/text, extension and root workflow unchanged.
+
+**Handoff/limits:** [12.5](../site/src/content/docs/chapter-12/12.5-lossless-infix.mdx) and matching rlox ready for combined review. Prior publication/reference/navigation/control checks apply; no manuscript/UI behavior correction or repeated site suite needed. Appearance remains with user; no screenshot/browser visual/hydration check. Native verification local only; no new hosted/minimum-compiler/other-platform/oversized-file claim. No new framework, commit/push or later work. Await acceptance/instruction.
+
+**CH12-05 acceptance:** User said “ok great, commit and let’s move on to section 12.6”, accepting the combined infix endpoint and authorizing its commit followed by 12.6 text only. No push.

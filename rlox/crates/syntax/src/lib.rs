@@ -119,6 +119,7 @@ syntax_kinds! {
     NumberExpr,
     GroupingExpr,
     UnaryExpr,
+    BinaryExpr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
