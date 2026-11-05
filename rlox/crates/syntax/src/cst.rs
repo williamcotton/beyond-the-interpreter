@@ -16,29 +16,33 @@ pub struct Parse {
 pub fn parse(source: &str) -> Result<Parse, SourceTooLarge> {
     let mut parser = Parser::new(source)?;
     parser.builder.start_node(SyntaxKind::Root.into_raw());
-    let mut errors = Vec::new();
-    match parser.expression(0) {
-        Err(error) => errors.push(error),
-        Ok(_) => {
-            parser.eat_trivia();
-            if parser.peek().is_some() {
-                errors.push(parser.error("expected end of input"));
-            }
+    if let Err(error) = parser.expression(0) {
+        parser.errors.push(error);
+        while parser.current < parser.tokens.len() {
+            parser.bump();
         }
-    }
-
-    while parser.current < parser.tokens.len() {
-        parser.bump();
+    } else {
+        parser.eat_trivia();
+        while parser.peek().is_some() {
+            let error = parser.error("expected end of input");
+            parser.errors.push(error);
+            parser.bump();
+            parser.eat_trivia();
+        }
     }
     parser.builder.finish_node();
     let root = SyntaxNode::new_root(parser.builder.finish());
-    Ok(Parse { root, errors })
+    Ok(Parse {
+        root,
+        errors: parser.errors,
+    })
 }
 
 struct Parser<'src> {
     source: &'src str,
     tokens: Vec<Token>,
     current: usize,
+    errors: Vec<ParseError>,
     builder: GreenNodeBuilder<'static>,
 }
 
@@ -48,6 +52,7 @@ impl<'src> Parser<'src> {
             source,
             tokens: scan(source)?,
             current: 0,
+            errors: Vec::new(),
             builder: GreenNodeBuilder::new(),
         })
     }
@@ -159,20 +164,49 @@ impl<'src> Parser<'src> {
         Ok(height)
     }
 
+    fn missing_expression(&mut self) {
+        self.builder.start_node(SyntaxKind::MissingExpr.into_raw());
+        self.builder.finish_node();
+    }
+
     fn unary(&mut self, nesting: usize) -> Result<usize, ParseError> {
-        self.eat_trivia();
-        match self.peek() {
-            Some(token) if token.kind == SyntaxKind::Minus => {
-                if nesting >= MAX_NESTING {
-                    return Err(self.error("expression nesting limit exceeded"));
+        let mut reported = false;
+        loop {
+            self.eat_trivia();
+            match self.peek() {
+                Some(token) if token.kind == SyntaxKind::Minus => {
+                    if nesting >= MAX_NESTING {
+                        return Err(self.error("expression nesting limit exceeded"));
+                    }
+                    self.builder.start_node(SyntaxKind::UnaryExpr.into_raw());
+                    self.bump();
+                    let result = self.unary(nesting + 1);
+                    self.builder.finish_node();
+                    return result.map(|height| height + 1);
                 }
-                self.builder.start_node(SyntaxKind::UnaryExpr.into_raw());
-                self.bump();
-                let result = self.unary(nesting + 1);
-                self.builder.finish_node();
-                result.map(|height| height + 1)
+                Some(token) if matches!(token.kind, SyntaxKind::Number | SyntaxKind::LeftParen) => {
+                    return self.primary(nesting);
+                }
+                None
+                | Some(Token {
+                    kind:
+                        SyntaxKind::Plus | SyntaxKind::Star | SyntaxKind::Slash | SyntaxKind::RightParen,
+                    ..
+                }) => {
+                    if !reported {
+                        let error = self.error("expected an expression");
+                        self.errors.push(error);
+                    }
+                    self.missing_expression();
+                    return Ok(0);
+                }
+                Some(_) => {
+                    let error = self.error("expected an expression");
+                    self.errors.push(error);
+                    self.bump();
+                    reported = true;
+                }
             }
-            _ => self.primary(nesting),
         }
     }
 
@@ -185,7 +219,29 @@ impl<'src> Parser<'src> {
                 Ok(0)
             }
             Some(token) if token.kind == SyntaxKind::LeftParen => self.group(nesting),
-            _ => Err(self.error("expected an expression")),
+            _ => unreachable!("unary checks primary starters"),
+        }
+    }
+
+    fn close_group(&mut self) {
+        loop {
+            self.eat_trivia();
+            match self.peek() {
+                Some(token) if token.kind == SyntaxKind::RightParen => {
+                    self.bump();
+                    break;
+                }
+                Some(_) => {
+                    let error = self.error("expected ')'");
+                    self.errors.push(error);
+                    self.bump();
+                }
+                None => {
+                    let error = self.error("expected ')'");
+                    self.errors.push(error);
+                    break;
+                }
+            }
         }
     }
 
@@ -198,14 +254,8 @@ impl<'src> Parser<'src> {
         let result = match self.expression(nesting + 1) {
             Err(error) => Err(error),
             Ok(inner_height) => {
-                self.eat_trivia();
-                match self.peek() {
-                    Some(token) if token.kind == SyntaxKind::RightParen => {
-                        self.bump();
-                        Ok(inner_height + 1)
-                    }
-                    _ => Err(self.error("expected ')'")),
-                }
+                self.close_group();
+                Ok(inner_height + 1)
             }
         };
         self.builder.finish_node();
@@ -254,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_source_for_success_and_first_failure() {
+    fn preserves_source_during_local_recovery() {
         for source in [
             "",
             " // é\n",
@@ -273,7 +323,6 @@ mod tests {
             assert_eq!(parsed.root.to_string(), source);
             assert_eq!(usize::from(parsed.root.text_range().start()), 0);
             assert_eq!(usize::from(parsed.root.text_range().end()), source.len());
-            assert!(parsed.errors.len() <= 1);
         }
         for source in ["001.50", "((12.5))", " // é\n(12.5) // end"] {
             assert!(parse(source).expect("small source").errors.is_empty());
@@ -281,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_located_errors_and_retains_the_suffix() {
+    fn reports_located_errors_and_recovers_group_closers() {
         for (source, message, start, end) in [
             ("", "expected an expression", 0, 0),
             (" // é\n", "expected an expression", 7, 7),
@@ -309,22 +358,16 @@ mod tests {
             "(12.5"
         );
         let invalid = parse("(1 @)").expect("small source");
-        assert_eq!(
-            invalid
-                .root
-                .first_child()
-                .expect("partial group")
-                .to_string(),
-            "(1 "
-        );
-        let suffix: Vec<_> = invalid
-            .root
+        let group = invalid.root.first_child().expect("group");
+        assert_eq!(group.to_string(), "(1 @)");
+        assert_eq!(invalid.root.children_with_tokens().count(), 1);
+        let ending: Vec<_> = group
             .children_with_tokens()
-            .skip(1)
+            .skip(3)
             .map(|element| (element.kind(), element.to_string()))
             .collect();
         assert_eq!(
-            suffix,
+            ending,
             vec![
                 (SyntaxKind::Error, "@".to_owned()),
                 (SyntaxKind::RightParen, ")".to_owned())
@@ -447,16 +490,16 @@ mod tests {
         let missing = parse("-").expect("small source");
         let unary = missing.root.first_child().expect("partial unary");
         assert_eq!(unary.kind(), SyntaxKind::UnaryExpr);
-        assert_eq!(unary.children().count(), 0);
+        let operand = unary.first_child().expect("missing operand slot");
+        assert_eq!(operand.kind(), SyntaxKind::MissingExpr);
+        assert_eq!(usize::from(operand.text_range().start()), 1);
+        assert_eq!(usize::from(operand.text_range().end()), 1);
         assert_eq!(unary.to_string(), "-");
         let invalid = parse("-é").expect("small source");
-        let suffix = invalid
-            .root
-            .children_with_tokens()
-            .nth(1)
-            .expect("error token");
-        assert_eq!(suffix.kind(), SyntaxKind::Error);
-        assert_eq!(suffix.to_string(), "é");
+        let unary = invalid.root.first_child().expect("unary");
+        let skipped = unary.children_with_tokens().nth(1).expect("error token");
+        assert_eq!(skipped.kind(), SyntaxKind::Error);
+        assert_eq!(skipped.to_string(), "é");
     }
 
     #[test]
@@ -567,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_emitted_pieces_when_an_operand_fails() {
+    fn recovers_missing_binary_operands() {
         for (source, message, start, end) in [
             ("1 +", "expected an expression", 3, 3),
             ("8 **2", "expected an expression", 3, 4),
@@ -585,19 +628,10 @@ mod tests {
             assert_eq!(usize::from(error.range.end()), end);
         }
         let failed = parse("1 +").expect("small source");
-        let kinds: Vec<_> = failed
-            .root
-            .children_with_tokens()
-            .map(|element| element.kind())
-            .collect();
-        assert_eq!(
-            kinds,
-            vec![
-                SyntaxKind::NumberExpr,
-                SyntaxKind::Whitespace,
-                SyntaxKind::Plus
-            ]
-        );
+        let binary = failed.root.first_child().expect("partial binary");
+        assert_eq!(binary.kind(), SyntaxKind::BinaryExpr);
+        let kinds: Vec<_> = binary.children().map(|node| node.kind()).collect();
+        assert_eq!(kinds, vec![SyntaxKind::NumberExpr, SyntaxKind::MissingExpr]);
     }
 
     #[test]
@@ -657,6 +691,128 @@ mod tests {
             assert_eq!(usize::from(parsed.errors[0].range.start()), operator);
             assert_eq!(usize::from(parsed.errors[0].range.end()), operator + 1);
             assert_eq!(parsed.root.to_string(), source);
+        }
+    }
+
+    #[test]
+    fn keeps_missing_operands_in_distinct_left_and_right_slots() {
+        for (source, left, right, missing_at) in [
+            ("1 +", SyntaxKind::NumberExpr, SyntaxKind::MissingExpr, 3),
+            ("* 2", SyntaxKind::MissingExpr, SyntaxKind::NumberExpr, 0),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.errors.len(), 1);
+            assert_eq!(parsed.root.to_string(), source);
+            let binary = parsed.root.first_child().expect("binary");
+            assert_eq!(binary.kind(), SyntaxKind::BinaryExpr);
+            let operands: Vec<_> = binary.children().collect();
+            assert_eq!(operands.len(), 2);
+            assert_eq!(operands[0].kind(), left);
+            assert_eq!(operands[1].kind(), right);
+            let missing = operands
+                .iter()
+                .find(|node| node.kind() == SyntaxKind::MissingExpr)
+                .expect("missing slot");
+            assert_eq!(usize::from(missing.text_range().start()), missing_at);
+            assert_eq!(usize::from(missing.text_range().end()), missing_at);
+            assert_eq!(missing.to_string(), "");
+            assert_eq!(missing.children_with_tokens().count(), 0);
+        }
+    }
+
+    #[test]
+    fn recovers_group_closers_and_collects_multiple_errors() {
+        let source = "(1 @) + é";
+        let parsed = parse(source).expect("small source");
+        assert_eq!(parsed.root.to_string(), source);
+        let errors: Vec<_> = parsed
+            .errors
+            .iter()
+            .map(|error| {
+                (
+                    error.message.as_str(),
+                    usize::from(error.range.start()),
+                    usize::from(error.range.end()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            errors,
+            vec![("invalid token", 3, 4), ("invalid token", 8, 10)]
+        );
+        let binary = parsed.root.first_child().expect("binary");
+        assert_eq!(binary.kind(), SyntaxKind::BinaryExpr);
+        let mut operands = binary.children();
+        assert_eq!(operands.next().expect("left group").to_string(), "(1 @)");
+        assert_eq!(
+            operands.next().expect("missing right").kind(),
+            SyntaxKind::MissingExpr
+        );
+        let closed = parse("(-)").expect("small source");
+        assert_eq!(closed.root.first_child().expect("group").to_string(), "(-)");
+        assert_eq!(closed.root.children_with_tokens().count(), 1);
+        let incomplete = parse("(1 + 2").expect("small source");
+        let group = incomplete.root.first_child().expect("group");
+        assert!(
+            !group
+                .children_with_tokens()
+                .any(|element| element.kind() == SyntaxKind::RightParen)
+        );
+        assert_eq!(incomplete.root.to_string(), "(1 + 2");
+    }
+
+    #[test]
+    fn retains_unowned_closers_and_other_root_suffix_tokens() {
+        let source = "1 ) é";
+        let parsed = parse(source).expect("small source");
+        assert_eq!(parsed.root.to_string(), source);
+        let errors: Vec<_> = parsed
+            .errors
+            .iter()
+            .map(|error| {
+                (
+                    error.message.as_str(),
+                    usize::from(error.range.start()),
+                    usize::from(error.range.end()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            errors,
+            vec![("expected end of input", 2, 3), ("invalid token", 4, 6)]
+        );
+    }
+
+    #[test]
+    fn terminates_on_malformed_shapes_and_stops_at_resource_limits() {
+        for source in [
+            "", ")", "((( ", "1 + * 2", "@-é", "1 ) @", "((1 + ))", "++++", "****",
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.root.to_string(), source);
+            assert_eq!(usize::from(parsed.root.text_range().end()), source.len());
+            assert!(!parsed.errors.is_empty());
+        }
+        for source in [
+            format!(
+                "{}1{}",
+                "(".repeat(MAX_NESTING + 1),
+                ")".repeat(MAX_NESTING + 1)
+            ),
+            "*".repeat(MAX_NESTING + 6),
+        ] {
+            let parsed = parse(&source).expect("small source");
+            assert_eq!(parsed.root.to_string(), source);
+            assert_eq!(
+                parsed.errors.last().expect("limit error").message,
+                "expression nesting limit exceeded"
+            );
+            assert!(
+                !parsed
+                    .errors
+                    .iter()
+                    .any(|error| error.message == "expected end of input")
+            );
         }
     }
 }

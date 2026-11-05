@@ -120,6 +120,7 @@ syntax_kinds! {
     GroupingExpr,
     UnaryExpr,
     BinaryExpr,
+    MissingExpr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
