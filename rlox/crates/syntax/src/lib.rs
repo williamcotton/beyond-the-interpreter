@@ -1,12 +1,38 @@
 pub mod expr;
 pub mod parser;
+pub mod tree;
 
 use logos::Logos;
 
 use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size};
 
-#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SyntaxKind {
+macro_rules! syntax_kinds {
+    ($( $(#[$attribute:meta])* $kind:ident, )*) => {
+        #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[repr(u16)]
+        pub enum SyntaxKind {
+            $( $(#[$attribute])* $kind, )*
+        }
+
+        impl SyntaxKind {
+            pub fn into_raw(self) -> rowan::SyntaxKind {
+                rowan::SyntaxKind(self as u16)
+            }
+
+            pub fn from_raw(raw: rowan::SyntaxKind) -> Option<Self> {
+                match raw.0 {
+                    $(value if value == Self::$kind as u16 => Some(Self::$kind),)*
+                    _ => None,
+                }
+            }
+
+            #[cfg(test)]
+            const ALL: &'static [Self] = &[$(Self::$kind,)*];
+        }
+    };
+}
+
+syntax_kinds! {
     #[token("(")]
     LeftParen,
     #[token(")")]
@@ -88,6 +114,8 @@ pub enum SyntaxKind {
     #[regex(r"//[^\n]*", allow_greedy = true)]
     LineComment,
     Error,
+    Root,
+    NumberExpr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -799,5 +827,13 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn kind_conversion_accepts_only_declared_kinds() {
+        for &kind in SyntaxKind::ALL {
+            assert_eq!(SyntaxKind::from_raw(kind.into_raw()), Some(kind));
+        }
+        assert_eq!(SyntaxKind::from_raw(rowan::SyntaxKind(u16::MAX)), None);
     }
 }

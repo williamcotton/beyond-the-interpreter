@@ -105,6 +105,7 @@ export default defineConfig({
           label: 'Chapter 12 · Building Lossless Trees with Rowan',
           items: [
             { label: '12.1 · Use Rowan-compatible text coordinates', link: '/chapter-12/12.1-rowan-coordinates/' },
+            { label: '12.2 · Keep every token in a small syntax tree', link: '/chapter-12/12.2-lossless-tree/' },
           ],
         },
       ],

@@ -1,0 +1,1486 @@
+---
+title: 12.2 — Keep every token in a small syntax tree
+slug: chapter-12/12.2-lossless-tree
+description: Build a tiny Rowan tree that preserves source spelling, trivia, errors and byte positions.
+prev:
+  link: /chapter-12/12.1-rowan-coordinates/
+  label: 12.1 · Use Rowan-compatible text coordinates
+next: false
+---
+
+import LosslessTree from '../../../components/LosslessTree';
+
+<p className="book-subtitle">Chapter 12 · Building Lossless Trees with Rowan</p>
+
+Try recovering `001.50` from our owned `Expr::Number(1.5)`. The value tells
+us the number, but it can't tell us whether the reader wrote `1.5`,
+`001.50` or surrounded it with comments. Once the parser drops those
+bytes, the printer can't recover them.
+
+The [abstract syntax trees in Crafting Interpreters](https://craftinginterpreters.com/representing-code.html#implementing-syntax-trees)
+keep the structure that evaluation needs. Here we need a view of the actual
+source as well.
+
+An editor needs another view. A **concrete syntax tree** keeps tokens and
+source spelling, including whitespace and comments—often called *trivia*.
+We'll keep that trivia rather than discard it. A tree is **lossless** when
+its tokens, in order, reconstruct the entire source, even when some tokens
+aren't valid Lox.
+
+Explore these two small sources. Select a tree entry to connect its parent,
+text and byte range. `NumberExpr` is a node containing a `Number` token;
+its token keeps the original spelling. The root also keeps the surrounding
+comments and whitespace.
+
+<LosslessTree client:load />
+
+The comment containing `é` ends at byte 6, and the following number starts
+at byte 7. The comment's non-ASCII letter occupies two bytes. The AST's
+stored value has neither these positions nor this comment.
+
+We'll build precisely this small shape. Each number token gets a
+`NumberExpr` wrapper; all other tokens remain direct root children. This
+step stores source without deciding how operators and groups fit together.
+For `1 + 2`, it will retain two number nodes and the intervening tokens,
+without constructing a binary expression. The existing arithmetic parser
+continues to work separately until the concrete parser replaces it.
+
+Start from [12.1](/chapter-12/12.1-rowan-coordinates/), in the **Rust
+workspace directory**. We need Rowan's builder in the syntax package now,
+so add its direct dependency alongside the existing ones:
+
+```diff title="rlox/crates/syntax/Cargo.toml · dependencies"
+ rlox-text = { path = "../text" }
++rowan = "=0.17.0"
+```
+
+This is the same Rowan version already used by text. Cargo will record the
+new dependency edge in the workspace `Cargo.lock`; retain that update.
+
+## Give every kind one declaration
+
+Rowan stores a kind as a small numeric tag, `rowan::SyntaxKind(u16)`. Our
+`SyntaxKind` enum gives those tags Lox names. Trees also need node kinds,
+starting with `Root` and `NumberExpr`.
+
+We need conversion in both directions. Casting one of our declared enum
+values to `u16` is straightforward. Turning an arbitrary integer back into
+an enum requires checking that it names a declared variant. A second
+handwritten match list could drift from the enum when a kind is added.
+Instead, a small local macro will generate both from the same list.
+
+In **`rlox/crates/syntax/src/lib.rs`**, insert this macro after the imports
+and before the existing `SyntaxKind` declaration:
+
+```rust title="rlox/crates/syntax/src/lib.rs · insert kind-declaration macro"
+macro_rules! syntax_kinds {
+    ($( $(#[$attribute:meta])* $kind:ident, )*) => {
+        #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[repr(u16)]
+        pub enum SyntaxKind {
+            $( $(#[$attribute])* $kind, )*
+        }
+
+        impl SyntaxKind {
+            pub fn into_raw(self) -> rowan::SyntaxKind {
+                rowan::SyntaxKind(self as u16)
+            }
+
+            pub fn from_raw(raw: rowan::SyntaxKind) -> Option<Self> {
+                match raw.0 {
+                    $(value if value == Self::$kind as u16 => Some(Self::$kind),)*
+                    _ => None,
+                }
+            }
+
+            #[cfg(test)]
+            const ALL: &'static [Self] = &[$(Self::$kind,)*];
+        }
+    };
+}
+```
+
+A declarative macro matches Rust source during compilation. In its pattern,
+`$kind:ident` captures a variant name and `$attribute:meta` captures an
+attribute such as `token("+")`. The outer `$()*` repeats once per variant;
+the inner repetition forwards any attributes on that variant to the enum.
+The same captured names generate the checked match arms and a test-only
+list. See the Rust Book's [declarative macro explanation](https://doc.rust-lang.org/book/ch20-05-macros.html#declarative-macros-for-general-metaprogramming).
+
+`#[repr(u16)]` gives the enum a 16-bit representation. The enum-to-integer
+cast stays inside that representation. In the other direction, each match
+arm compares the raw value with a known variant's tag; an unknown value
+returns `None`. No integer is treated as a Rust enum before that check.
+The tags are internal tree labels, not stable serialized identifiers.
+
+Now change just the opening of the existing enum declaration to invoke
+the macro, keeping **every existing variant and Logos attribute** in place:
+
+```diff title="rlox/crates/syntax/src/lib.rs · existing kind-list opening"
+-#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
+-pub enum SyntaxKind {
++syntax_kinds! {
+     #[token("(")]
+     LeftParen,
+```
+
+At its end, add the two node kinds after `Error`:
+
+```diff title="rlox/crates/syntax/src/lib.rs · existing kind-list end"
+     Error,
++    Root,
++    NumberExpr,
+ }
+```
+
+The macro now generates `pub enum SyntaxKind`, including its Logos derive.
+Existing scanner code still uses that enum. Like `Error`, our node kinds
+have no Logos token or regex rule, so scanning never emits them; the tree
+builder supplies them. `Ord` and `Hash` are required by Rowan's language
+contract. Their derived implementations concern kind identity, not grammar
+precedence.
+
+At the end of the **existing `mod tests`**, before its closing brace, add:
+
+```rust title="rlox/crates/syntax/src/lib.rs · append conversion test"
+    #[test]
+    fn kind_conversion_accepts_only_declared_kinds() {
+        for &kind in SyntaxKind::ALL {
+            assert_eq!(SyntaxKind::from_raw(kind.into_raw()), Some(kind));
+        }
+        assert_eq!(SyntaxKind::from_raw(rowan::SyntaxKind(u16::MAX)), None);
+    }
+```
+
+The test-only `ALL` list comes from the declaration too. This checks that
+every declared tag round-trips, while the undeclared maximum tag is rejected.
+
+## Connect Rowan to Lox
+
+Add this module declaration beside `expr` and `parser` at the top of
+**`rlox/crates/syntax/src/lib.rs`**:
+
+```diff title="rlox/crates/syntax/src/lib.rs · module declaration"
+ pub mod parser;
++pub mod tree;
+```
+
+Create **`rlox/crates/syntax/src/tree.rs`** with the following definitions.
+We'll append its builder function next, then check them together:
+
+```rust title="rlox/crates/syntax/src/tree.rs · language and aliases"
+use rlox_text::{SourceTooLarge, slice};
+use rowan::GreenNodeBuilder;
+
+use crate::{SyntaxKind, scan};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LoxLanguage {}
+
+impl rowan::Language for LoxLanguage {
+    type Kind = SyntaxKind;
+
+    fn kind_from_raw(raw: rowan::SyntaxKind) -> SyntaxKind {
+        SyntaxKind::from_raw(raw).expect("tree contains an unknown Lox kind")
+    }
+
+    fn kind_to_raw(kind: SyntaxKind) -> rowan::SyntaxKind {
+        kind.into_raw()
+    }
+}
+
+pub type SyntaxNode = rowan::SyntaxNode<LoxLanguage>;
+pub type SyntaxToken = rowan::SyntaxToken<LoxLanguage>;
+pub type SyntaxElement = rowan::SyntaxElement<LoxLanguage>;
+```
+
+[`Language`](https://docs.rs/rowan/0.17.0/rowan/api/trait.Language.html)
+connects Rowan's numeric tags to a language's named kinds. Its associated
+`Kind` type is our enum; its two functions use the conversions we just
+added. An unknown tag is an invariant failure here: this module only builds
+trees from declared kinds. `from_raw` remains a checked `Option` API when
+a caller needs to inspect a raw tag.
+
+`LoxLanguage` is an empty enum used as a type marker. We never construct
+a value of it. Rowan's generic node/token handles carry that language type,
+and the aliases save us from repeating it at every use. An alias doesn't
+create another wrapper. These handles still accept any declared Lox node
+kind; expression-specific views come later. The Rust Book explains
+[associated types](https://doc.rust-lang.org/book/ch20-02-advanced-traits.html#specifying-placeholder-types-in-trait-definitions-with-associated-types)
+and [type aliases](https://doc.rust-lang.org/book/ch20-03-advanced-types.html#creating-type-synonyms-with-type-aliases).
+
+## Put the source into green storage
+
+Rowan separates **green storage** from **red handles**. Green nodes store
+kind, children and text lengths; tokens store kind and exact text. A green
+node does not store a parent pointer or an absolute source offset.
+
+A red handle supplies that context: a node's parent and its position in a
+particular tree. Child offsets follow from the lengths of preceding
+siblings. A number token needn't remember that it began at byte 7 in our
+example; a positioned handle can calculate that from the earlier trivia.
+The colors name these layers, not anything we need to display in an editor.
+
+Append this function to **`tree.rs`**:
+
+```rust title="rlox/crates/syntax/src/tree.rs · append token-tree builder"
+pub fn token_tree(source: &str) -> Result<SyntaxNode, SourceTooLarge> {
+    let tokens = scan(source)?;
+    let mut builder = GreenNodeBuilder::new();
+    builder.start_node(SyntaxKind::Root.into_raw());
+
+    for token in tokens {
+        let spelling = slice(source, token.range).expect("scanner ranges are valid");
+        if token.kind == SyntaxKind::Number {
+            builder.start_node(SyntaxKind::NumberExpr.into_raw());
+        }
+        builder.token(token.kind.into_raw(), spelling);
+        if token.kind == SyntaxKind::Number {
+            builder.finish_node();
+        }
+    }
+
+    builder.finish_node();
+    let green = builder.finish();
+    Ok(SyntaxNode::new_root(green))
+}
+```
+
+[`GreenNodeBuilder`](https://docs.rs/rowan/0.17.0/rowan/struct.GreenNodeBuilder.html)
+collects children for the current node. `start_node` opens a node,
+`token` adds a leaf with its exact text, and `finish_node` closes the most
+recently opened node. A number opens and closes its own wrapper inside the
+root. Every opening has one closing; even an empty source produces a root.
+
+We use the scanner's checked ranges only to select spelling from the
+original source. We don't pass those offsets to Rowan. The builder
+accumulates token lengths, so preserving *every* token in order produces
+the same byte positions. Filtering out comments here would shift every
+later location and break source reconstruction.
+
+`finish` consumes the builder and returns the completed green root.
+`SyntaxNode::new_root` gives it a positioned red root at offset zero.
+Its handles can expose parents, ranges and text while sharing immutable
+green storage. This explains the representation; we don't need a tree
+cache or incremental editing system to use it.
+
+`scan(source)?` runs before we build anything, preserving 12.1's file-size
+failure. An ordinary `Error` token still has valid source bytes, and we
+store those bytes like any other token. A tree containing it isn't a claim
+that the source is a valid expression.
+
+The module is now ready to compile. Run:
+
+```sh
+cargo check --workspace --all-targets
+```
+
+## Inspect text, children and positions
+
+Create **`rlox/crates/syntax/examples/token_tree.rs`**:
+
+```rust title="rlox/crates/syntax/examples/token_tree.rs · complete initial file"
+use rlox_syntax::tree::token_tree;
+
+fn main() {
+    for source in ["001.50", " // é\n12.5 // end", "@é!"] {
+        match token_tree(source) {
+            Ok(root) => {
+                println!("source: {source:?}");
+                println!(
+                    "root: {:?} [{}..{})",
+                    root.kind(),
+                    usize::from(root.text_range().start()),
+                    usize::from(root.text_range().end())
+                );
+                for element in root.children_with_tokens() {
+                    println!(
+                        "  {:?} [{}..{}) {:?}",
+                        element.kind(),
+                        usize::from(element.text_range().start()),
+                        usize::from(element.text_range().end()),
+                        element.to_string()
+                    );
+                }
+                println!("reconstructed: {:?}", root.to_string());
+            }
+            Err(error) => eprintln!("{error}"),
+        }
+    }
+}
+```
+
+`children_with_tokens` visits immediate children in source order. Its items
+may be either nodes or tokens. Here, the number wrapper appears as one node
+whose text is its token's spelling; trivia and errors appear as tokens.
+The ordinary `children` iterator would skip those token children.
+
+Run:
+
+```sh
+cargo run -p rlox-syntax --example token_tree
+```
+
+For the source with comments, expect:
+
+```text
+source: " // é\n12.5 // end"
+root: Root [0..18)
+  Whitespace [0..1) " "
+  LineComment [1..6) "// é"
+  Whitespace [6..7) "\n"
+  NumberExpr [7..11) "12.5"
+  Whitespace [11..12) " "
+  LineComment [12..18) "// end"
+reconstructed: " // é\n12.5 // end"
+```
+
+The number wrapper and its `Number` token cover the same four bytes.
+Selecting them in the comparison above changes the parent being inspected,
+even though the highlighted source stays the same. For `001.50`, the tree
+keeps all six bytes instead of turning them into `1.5`. For `@é!`, the
+example should keep both `Error` spellings and the `Bang` token and
+reconstruct the original source.
+
+## Check losslessness and relationships
+
+Append this test module to **`rlox/crates/syntax/src/tree.rs`**:
+
+```rust title="rlox/crates/syntax/src/tree.rs · append tests"
+#[cfg(test)]
+mod tests {
+    use super::token_tree;
+    use crate::SyntaxKind;
+
+    #[test]
+    fn preserves_all_source_even_without_an_expression() {
+        for source in ["", "001.50", " // é\n12.5 // end", "@é!", "1 + 2"] {
+            let root = token_tree(source).expect("small source");
+            assert_eq!(root.kind(), SyntaxKind::Root);
+            assert_eq!(root.to_string(), source);
+            assert_eq!(usize::from(root.text_range().start()), 0);
+            assert_eq!(usize::from(root.text_range().end()), source.len());
+            assert!(root.parent().is_none());
+        }
+    }
+
+    #[test]
+    fn positions_number_and_trivia_without_losing_their_relationships() {
+        let root = token_tree(" // é\n12.5 // end").expect("small source");
+        let number = root.first_child().expect("number node");
+        assert_eq!(number.kind(), SyntaxKind::NumberExpr);
+        assert_eq!(number.parent(), Some(root.clone()));
+        let token = number
+            .children_with_tokens()
+            .next()
+            .expect("number token")
+            .into_token()
+            .expect("a token child");
+        assert_eq!(token.kind(), SyntaxKind::Number);
+        assert_eq!(token.text(), "12.5");
+        assert_eq!(token.parent(), Some(number.clone()));
+        assert_eq!(token.text_range(), number.text_range());
+        let children: Vec<_> = root
+            .children_with_tokens()
+            .map(|element| {
+                (
+                    element.kind(),
+                    usize::from(element.text_range().start()),
+                    usize::from(element.text_range().end()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            children,
+            vec![
+                (SyntaxKind::Whitespace, 0, 1),
+                (SyntaxKind::LineComment, 1, 6),
+                (SyntaxKind::Whitespace, 6, 7),
+                (SyntaxKind::NumberExpr, 7, 11),
+                (SyntaxKind::Whitespace, 11, 12),
+                (SyntaxKind::LineComment, 12, 18),
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_invalid_token_spelling() {
+        let root = token_tree("@é!").expect("representable source");
+        let tokens: Vec<_> = root
+            .children_with_tokens()
+            .map(|element| {
+                let token = element.into_token().expect("no number nodes");
+                (
+                    token.kind(),
+                    token.text().to_owned(),
+                    usize::from(token.text_range().start()),
+                    usize::from(token.text_range().end()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            tokens,
+            vec![
+                (SyntaxKind::Error, "@".to_owned(), 0, 1),
+                (SyntaxKind::Error, "é".to_owned(), 1, 3),
+                (SyntaxKind::Bang, "!".to_owned(), 3, 4),
+            ]
+        );
+    }
+}
+```
+
+The first test checks exact reconstruction and root extent, including an
+empty source and input our expression parser rejects. The second checks
+that positioned trivia and number children match our byte map, and that
+the number token has the number node as its parent. The last preserves
+invalid token spelling and the two-byte range of `é`.
+
+Run the checks and the existing parser inspector:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run -p rlox-syntax --example parse_expression
+```
+
+The original arithmetic observations should stay unchanged. We have added
+a source-preserving representation without changing which expressions that
+parser accepts. Rowan stores the structure we request; it doesn't generate
+our grammar. Next we'll teach our number and grouping rules to choose that
+structure while retaining source tokens.
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/Cargo.toml</summary>
+
+```toml title="rlox/crates/syntax/Cargo.toml · complete resulting file"
+[package]
+name = "rlox-syntax"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+logos = "=0.16.1"
+rlox-text = { path = "../text" }
+rowan = "=0.17.0"
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/src/lib.rs</summary>
+
+```rust title="rlox/crates/syntax/src/lib.rs · complete resulting file"
+pub mod expr;
+pub mod parser;
+pub mod tree;
+
+use logos::Logos;
+
+use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size};
+
+macro_rules! syntax_kinds {
+    ($( $(#[$attribute:meta])* $kind:ident, )*) => {
+        #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[repr(u16)]
+        pub enum SyntaxKind {
+            $( $(#[$attribute])* $kind, )*
+        }
+
+        impl SyntaxKind {
+            pub fn into_raw(self) -> rowan::SyntaxKind {
+                rowan::SyntaxKind(self as u16)
+            }
+
+            pub fn from_raw(raw: rowan::SyntaxKind) -> Option<Self> {
+                match raw.0 {
+                    $(value if value == Self::$kind as u16 => Some(Self::$kind),)*
+                    _ => None,
+                }
+            }
+
+            #[cfg(test)]
+            const ALL: &'static [Self] = &[$(Self::$kind,)*];
+        }
+    };
+}
+
+syntax_kinds! {
+    #[token("(")]
+    LeftParen,
+    #[token(")")]
+    RightParen,
+    #[token("{")]
+    LeftBrace,
+    #[token("}")]
+    RightBrace,
+    #[token(",")]
+    Comma,
+    #[token(".")]
+    Dot,
+    #[token("-")]
+    Minus,
+    #[token("+")]
+    Plus,
+    #[token(";")]
+    Semicolon,
+    #[token("/")]
+    Slash,
+    #[token("*")]
+    Star,
+    #[token("!")]
+    Bang,
+    #[token("!=")]
+    BangEqual,
+    #[token("=")]
+    Equal,
+    #[token("==")]
+    EqualEqual,
+    #[token(">")]
+    Greater,
+    #[token(">=")]
+    GreaterEqual,
+    #[token("<")]
+    Less,
+    #[token("<=")]
+    LessEqual,
+    #[token("and")]
+    And,
+    #[token("class")]
+    Class,
+    #[token("else")]
+    Else,
+    #[token("false")]
+    False,
+    #[token("for")]
+    For,
+    #[token("fun")]
+    Fun,
+    #[token("if")]
+    If,
+    #[token("nil")]
+    Nil,
+    #[token("or")]
+    Or,
+    #[token("print")]
+    Print,
+    #[token("return")]
+    Return,
+    #[token("super")]
+    Super,
+    #[token("this")]
+    This,
+    #[token("true")]
+    True,
+    #[token("var")]
+    Var,
+    #[token("while")]
+    While,
+    #[regex(r#""[^"]*""#)]
+    String,
+    #[regex(r"[0-9]+(\.[0-9]+)?")]
+    Number,
+    #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
+    Identifier,
+    #[regex(r"[ \t\r\n]+")]
+    Whitespace,
+    #[regex(r"//[^\n]*", allow_greedy = true)]
+    LineComment,
+    Error,
+    Root,
+    NumberExpr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+
+pub fn scan(source: &str) -> Result<Vec<Token>, SourceTooLarge> {
+    checked_size(source.len())?;
+    let mut tokens = Vec::new();
+
+    for (result, span) in SyntaxKind::lexer(source).spanned() {
+        let kind = match result {
+            Ok(kind) => kind,
+            Err(()) => SyntaxKind::Error,
+        };
+        let range = checked_range(
+            checked_size(span.start).expect("validated source length"),
+            checked_size(span.end).expect("validated source length"),
+        )
+        .expect("Logos spans are ordered");
+
+        tokens.push(Token { kind, range });
+    }
+
+    Ok(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextSize, checked_range, checked_size, slice};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()=!").expect("small test source");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: checked_range(TextSize::new(1), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: checked_range(TextSize::new(2), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: checked_range(TextSize::new(3), TextSize::new(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").expect("small test source").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source).expect("small test source");
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(slice(source, tokens[0].range), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(slice(source, tokens[1].range), Some("!"));
+    }
+
+    #[test]
+    fn scans_adjacent_paired_operators() {
+        assert_eq!(
+            scan("!===").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::EqualEqual,
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_lookahead_preserves_the_next_character() {
+        assert_eq!(
+            scan("!é(").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(1), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: checked_range(TextSize::new(3), TextSize::new(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn single_operator_can_end_the_source() {
+        for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifiers_stop_before_operators() {
+        assert_eq!(
+            scan("a_2!=other").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: checked_range(TextSize::new(3), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(5), TextSize::new(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn identifiers_can_end_the_source() {
+        for source in ["_", "A9", "printer"] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn number_and_name_boundaries_preserve_unknown_characters() {
+        assert_eq!(
+            scan("2aé_b").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Number,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(1), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(4), TextSize::new(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_whitespace_between_tokens() {
+        assert_eq!(
+            scan("a \t\r\n!= b").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(1), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: checked_range(TextSize::new(5), TextSize::new(7)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(7), TextSize::new(8)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(8), TextSize::new(9)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn whitespace_uses_the_lox_character_set() {
+        for source in ["\u{000b}", "\u{000c}", "\u{00a0}"] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_ranges_cover_the_original_source() {
+        for source in [
+            "",
+            " \t\r\n",
+            "a \t\r\n!= b",
+            "a_2!=other",
+            "2aé_b",
+            "a\u{00a0}b",
+            "/",
+            "/name",
+            "//",
+            "//\n",
+            "//é\r\nname",
+            "///",
+            "a//x\nb",
+            "{},.-+;*",
+            "<=>=<>",
+            "<==>==",
+            "a<=b!=c>=d",
+            "(a+b)*c;",
+            "print printer",
+            "for forest",
+            "class classify",
+            "if(if_1)",
+            "return // print\nprinter",
+            "0 001 123.456",
+            "123. .5 -12 +3.5 1.2.3",
+            "123abc a2",
+            "print 0.5;//é\n123.",
+            r#"print "é";"#,
+            r#""a""b";"#,
+            r#""\"name"#,
+            "\"first\nsecond\" // done\n0.5",
+            "\"",
+            "\"é",
+            "\"first\n// still inside",
+            r#""ok""é"#,
+        ] {
+            let mut offset = 0;
+            let mut reconstructed = String::new();
+
+            for token in scan(source).expect("small test source") {
+                let text = slice(source, token.range).expect("valid UTF-8 source slice");
+                assert!(!text.is_empty());
+                let end = offset + text.len();
+                let expected = checked_range(
+                    checked_size(offset).expect("representable offset"),
+                    checked_size(end).expect("representable offset"),
+                )
+                .unwrap();
+                assert_eq!(token.range, expected);
+
+                reconstructed.push_str(text);
+                offset = end;
+            }
+
+            assert_eq!(offset, source.len());
+            assert_eq!(reconstructed, source);
+        }
+    }
+
+    #[test]
+    fn recognizes_single_slashes() {
+        assert_eq!(
+            scan("/").expect("small test source"),
+            vec![Token {
+                kind: SyntaxKind::Slash,
+                range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+            }]
+        );
+        assert_eq!(
+            scan("/name").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Slash,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(1), TextSize::new(5)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_leave_the_line_feed_unread() {
+        assert_eq!(
+            scan("//é\r\nname").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LineComment,
+                    range: checked_range(TextSize::new(0), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(6), TextSize::new(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_can_end_at_eof() {
+        for source in ["//", "//é", "///"] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::LineComment,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_characters_remain_separate_tokens() {
+        assert_eq!(
+            scan("@é💥").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(1), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(3), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_remaining_single_character_punctuation() {
+        for (source, kind) in [
+            ("{", SyntaxKind::LeftBrace),
+            ("}", SyntaxKind::RightBrace),
+            (",", SyntaxKind::Comma),
+            (".", SyntaxKind::Dot),
+            ("-", SyntaxKind::Minus),
+            ("+", SyntaxKind::Plus),
+            (";", SyntaxKind::Semicolon),
+            ("*", SyntaxKind::Star),
+            ("<", SyntaxKind::Less),
+            (">", SyntaxKind::Greater),
+        ] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn recognizes_adjacent_comparison_operators() {
+        assert_eq!(
+            scan("<=>=<>").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Less,
+                    range: checked_range(TextSize::new(4), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Greater,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn comparison_pairs_leave_extra_equals_tokens() {
+        assert_eq!(
+            scan("<==>==").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: checked_range(TextSize::new(2), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: checked_range(TextSize::new(3), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_reserved_words() {
+        for (source, kind) in [
+            ("and", SyntaxKind::And),
+            ("class", SyntaxKind::Class),
+            ("else", SyntaxKind::Else),
+            ("false", SyntaxKind::False),
+            ("for", SyntaxKind::For),
+            ("fun", SyntaxKind::Fun),
+            ("if", SyntaxKind::If),
+            ("nil", SyntaxKind::Nil),
+            ("or", SyntaxKind::Or),
+            ("print", SyntaxKind::Print),
+            ("return", SyntaxKind::Return),
+            ("super", SyntaxKind::Super),
+            ("this", SyntaxKind::This),
+            ("true", SyntaxKind::True),
+            ("var", SyntaxKind::Var),
+            ("while", SyntaxKind::While),
+        ] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn keywords_do_not_split_longer_identifiers() {
+        for source in [
+            "forest",
+            "printer",
+            "classify",
+            "true_value",
+            "_if",
+            "Print",
+        ] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_spelling_comes_from_the_source() {
+        let source = "print printer";
+        let tokens = scan(source).expect("small test source");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::Print,
+                    range: checked_range(TextSize::new(0), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(6), TextSize::new(13)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(slice(source, tokens[0].range), Some("print"));
+        assert_eq!(slice(source, tokens[1].range), Some(" "));
+        assert_eq!(slice(source, tokens[2].range), Some("printer"));
+    }
+
+    #[test]
+    fn recognizes_number_spellings() {
+        for source in ["0", "123", "001", "0.5", "123.456", "00.50"] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Number,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+            assert_eq!(slice(source, tokens[0].range), Some(source));
+        }
+    }
+
+    #[test]
+    fn numbers_leave_dots_signs_and_names_separate() {
+        for (source, expected) in [
+            (
+                "123.",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Dot, 3, 4)],
+            ),
+            (
+                ".5",
+                vec![(SyntaxKind::Dot, 0, 1), (SyntaxKind::Number, 1, 2)],
+            ),
+            (
+                "-12",
+                vec![(SyntaxKind::Minus, 0, 1), (SyntaxKind::Number, 1, 3)],
+            ),
+            (
+                "+3.5",
+                vec![(SyntaxKind::Plus, 0, 1), (SyntaxKind::Number, 1, 4)],
+            ),
+            (
+                "1.2.3",
+                vec![
+                    (SyntaxKind::Number, 0, 3),
+                    (SyntaxKind::Dot, 3, 4),
+                    (SyntaxKind::Number, 4, 5),
+                ],
+            ),
+            (
+                "123abc",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Identifier, 3, 6)],
+            ),
+            ("a2", vec![(SyntaxKind::Identifier, 0, 2)]),
+        ] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(tokens.len(), expected.len(), "{source}");
+            for (token, (kind, start, end)) in tokens.iter().zip(expected) {
+                assert_eq!(token.kind, kind, "{source}");
+                assert_eq!(
+                    token.range,
+                    checked_range(
+                        checked_size(start).expect("representable offset"),
+                        checked_size(end).expect("representable offset")
+                    )
+                    .unwrap(),
+                    "{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn keeps_complete_string_spellings() {
+        for source in [
+            r#""""#,
+            r#""hello""#,
+            r#""// 123 ; print""#,
+            "\"é💥\"",
+            "\"first\nsecond\"",
+            r#""\n""#,
+        ] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+            assert_eq!(slice(source, tokens[0].range), Some(source));
+        }
+    }
+
+    #[test]
+    fn strings_stop_at_the_next_quote() {
+        let source = r#""a""b";"#;
+        let tokens = scan(source).expect("small test source");
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(3), TextSize::new(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Semicolon,
+                    range: checked_range(TextSize::new(6), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(slice(source, tokens[0].range), Some(r#""a""#));
+        assert_eq!(slice(source, tokens[1].range), Some(r#""b""#));
+    }
+
+    #[test]
+    fn backslash_does_not_escape_a_quote() {
+        let source = r#""\"name"#;
+        assert_eq!(
+            scan(source).expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(3), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn unterminated_strings_cover_the_remaining_source() {
+        for source in ["\"", "\"é", "\"first\n// still inside"] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+            assert_eq!(slice(source, tokens[0].range), Some(source));
+        }
+
+        assert_eq!(
+            scan(r#""ok""é"#).expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(0), TextSize::new(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(4), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn kind_conversion_accepts_only_declared_kinds() {
+        for &kind in SyntaxKind::ALL {
+            assert_eq!(SyntaxKind::from_raw(kind.into_raw()), Some(kind));
+        }
+        assert_eq!(SyntaxKind::from_raw(rowan::SyntaxKind(u16::MAX)), None);
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/src/tree.rs</summary>
+
+```rust title="rlox/crates/syntax/src/tree.rs · complete resulting file"
+use rlox_text::{SourceTooLarge, slice};
+use rowan::GreenNodeBuilder;
+
+use crate::{SyntaxKind, scan};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LoxLanguage {}
+
+impl rowan::Language for LoxLanguage {
+    type Kind = SyntaxKind;
+
+    fn kind_from_raw(raw: rowan::SyntaxKind) -> SyntaxKind {
+        SyntaxKind::from_raw(raw).expect("tree contains an unknown Lox kind")
+    }
+
+    fn kind_to_raw(kind: SyntaxKind) -> rowan::SyntaxKind {
+        kind.into_raw()
+    }
+}
+
+pub type SyntaxNode = rowan::SyntaxNode<LoxLanguage>;
+pub type SyntaxToken = rowan::SyntaxToken<LoxLanguage>;
+pub type SyntaxElement = rowan::SyntaxElement<LoxLanguage>;
+
+pub fn token_tree(source: &str) -> Result<SyntaxNode, SourceTooLarge> {
+    let tokens = scan(source)?;
+    let mut builder = GreenNodeBuilder::new();
+    builder.start_node(SyntaxKind::Root.into_raw());
+
+    for token in tokens {
+        let spelling = slice(source, token.range).expect("scanner ranges are valid");
+        if token.kind == SyntaxKind::Number {
+            builder.start_node(SyntaxKind::NumberExpr.into_raw());
+        }
+        builder.token(token.kind.into_raw(), spelling);
+        if token.kind == SyntaxKind::Number {
+            builder.finish_node();
+        }
+    }
+
+    builder.finish_node();
+    let green = builder.finish();
+    Ok(SyntaxNode::new_root(green))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::token_tree;
+    use crate::SyntaxKind;
+
+    #[test]
+    fn preserves_all_source_even_without_an_expression() {
+        for source in ["", "001.50", " // é\n12.5 // end", "@é!", "1 + 2"] {
+            let root = token_tree(source).expect("small source");
+            assert_eq!(root.kind(), SyntaxKind::Root);
+            assert_eq!(root.to_string(), source);
+            assert_eq!(usize::from(root.text_range().start()), 0);
+            assert_eq!(usize::from(root.text_range().end()), source.len());
+            assert!(root.parent().is_none());
+        }
+    }
+
+    #[test]
+    fn positions_number_and_trivia_without_losing_their_relationships() {
+        let root = token_tree(" // é\n12.5 // end").expect("small source");
+        let number = root.first_child().expect("number node");
+        assert_eq!(number.kind(), SyntaxKind::NumberExpr);
+        assert_eq!(number.parent(), Some(root.clone()));
+        let token = number
+            .children_with_tokens()
+            .next()
+            .expect("number token")
+            .into_token()
+            .expect("a token child");
+        assert_eq!(token.kind(), SyntaxKind::Number);
+        assert_eq!(token.text(), "12.5");
+        assert_eq!(token.parent(), Some(number.clone()));
+        assert_eq!(token.text_range(), number.text_range());
+        let children: Vec<_> = root
+            .children_with_tokens()
+            .map(|element| {
+                (
+                    element.kind(),
+                    usize::from(element.text_range().start()),
+                    usize::from(element.text_range().end()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            children,
+            vec![
+                (SyntaxKind::Whitespace, 0, 1),
+                (SyntaxKind::LineComment, 1, 6),
+                (SyntaxKind::Whitespace, 6, 7),
+                (SyntaxKind::NumberExpr, 7, 11),
+                (SyntaxKind::Whitespace, 11, 12),
+                (SyntaxKind::LineComment, 12, 18),
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_invalid_token_spelling() {
+        let root = token_tree("@é!").expect("representable source");
+        let tokens: Vec<_> = root
+            .children_with_tokens()
+            .map(|element| {
+                let token = element.into_token().expect("no number nodes");
+                (
+                    token.kind(),
+                    token.text().to_owned(),
+                    usize::from(token.text_range().start()),
+                    usize::from(token.text_range().end()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            tokens,
+            vec![
+                (SyntaxKind::Error, "@".to_owned(), 0, 1),
+                (SyntaxKind::Error, "é".to_owned(), 1, 3),
+                (SyntaxKind::Bang, "!".to_owned(), 3, 4),
+            ]
+        );
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/examples/token_tree.rs</summary>
+
+```rust title="rlox/crates/syntax/examples/token_tree.rs · complete resulting file"
+use rlox_syntax::tree::token_tree;
+
+fn main() {
+    for source in ["001.50", " // é\n12.5 // end", "@é!"] {
+        match token_tree(source) {
+            Ok(root) => {
+                println!("source: {source:?}");
+                println!(
+                    "root: {:?} [{}..{})",
+                    root.kind(),
+                    usize::from(root.text_range().start()),
+                    usize::from(root.text_range().end())
+                );
+                for element in root.children_with_tokens() {
+                    println!(
+                        "  {:?} [{}..{}) {:?}",
+                        element.kind(),
+                        usize::from(element.text_range().start()),
+                        usize::from(element.text_range().end()),
+                        element.to_string()
+                    );
+                }
+                println!("reconstructed: {:?}", root.to_string());
+            }
+            Err(error) => eprintln!("{error}"),
+        }
+    }
+}
+```
+
+</details>

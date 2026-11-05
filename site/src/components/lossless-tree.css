@@ -1,0 +1,16 @@
+.lossless-tree {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border: 1px solid var(--sl-color-gray-4);
+  border-radius: 0.5rem;
+}
+.lossless-tree figcaption { font-weight: 700; margin-bottom: 1rem; }
+.lossless-tree select { max-width: 100%; padding: 0.4rem; color: var(--sl-color-text); background: var(--sl-color-bg); }
+.lossless-tree pre { overflow-x: auto; padding: 0.75rem; }
+.lossless-tree mark { background: var(--sl-color-text-accent); color: var(--sl-color-bg); outline: 2px solid currentColor; }
+.lossless-tree ol { list-style: none; padding-left: 0; }
+.lossless-tree li + li { margin-top: 0.35rem; }
+.lossless-tree button { width: 100%; padding: 0.5rem; text-align: left; color: var(--sl-color-text); background: var(--sl-color-bg); border: 1px solid var(--sl-color-gray-4); border-radius: 0.25rem; overflow-wrap: anywhere; cursor: pointer; }
+.lossless-tree button code { white-space: pre-wrap; }
+.lossless-tree button[aria-pressed='true'] { border: 2px solid var(--sl-color-text-accent); }
+.lossless-tree button:focus-visible, .lossless-tree select:focus-visible { outline: 3px solid var(--sl-color-text-accent); outline-offset: 3px; }
