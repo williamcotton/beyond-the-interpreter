@@ -1,7 +1,19 @@
 use rlox_syntax::cst::parse;
 
 fn main() {
-    for source in [" ( 001.50 ) ", "(12.5", "(1 @)", "1 + 2"] {
+    for source in [
+        " ( 001.50 ) ",
+        "(12.5",
+        "(1 @)",
+        "1 + 2",
+        "- // é\n12.5",
+        "--1",
+        "-(001.50)",
+        "(-1)",
+        "-",
+        "(-)",
+        "-é",
+    ] {
         match parse(source) {
             Ok(parsed) => {
                 println!("source: {source:?}");

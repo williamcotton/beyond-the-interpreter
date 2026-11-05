@@ -93,7 +93,27 @@ impl<'src> Parser<'src> {
     }
 
     fn expression(&mut self, nesting: usize) -> Result<(), ParseError> {
+        self.unary(nesting)
+    }
+
+    fn unary(&mut self, nesting: usize) -> Result<(), ParseError> {
         self.eat_trivia();
+        match self.peek() {
+            Some(token) if token.kind == SyntaxKind::Minus => {
+                if nesting >= MAX_NESTING {
+                    return Err(self.error("expression nesting limit exceeded"));
+                }
+                self.builder.start_node(SyntaxKind::UnaryExpr.into_raw());
+                self.bump();
+                let result = self.unary(nesting + 1);
+                self.builder.finish_node();
+                result
+            }
+            _ => self.primary(nesting),
+        }
+    }
+
+    fn primary(&mut self, nesting: usize) -> Result<(), ParseError> {
         match self.peek() {
             Some(token) if token.kind == SyntaxKind::Number => {
                 self.builder.start_node(SyntaxKind::NumberExpr.into_raw());
@@ -265,5 +285,142 @@ mod tests {
         assert_eq!(usize::from(parsed.errors[0].range.start()), MAX_NESTING);
         assert_eq!(usize::from(parsed.errors[0].range.end()), MAX_NESTING + 1);
         assert_eq!(parsed.root.to_string(), too_deep);
+    }
+
+    #[test]
+    fn unary_keeps_the_operator_and_intervening_trivia() {
+        let source = "- // é\n12.5";
+        let parsed = parse(source).expect("small source");
+        assert!(parsed.errors.is_empty());
+        assert_eq!(parsed.root.to_string(), source);
+        let unary = parsed.root.first_child().expect("unary node");
+        assert_eq!(unary.kind(), SyntaxKind::UnaryExpr);
+        let children: Vec<_> = unary
+            .children_with_tokens()
+            .map(|child| {
+                (
+                    child.kind(),
+                    usize::from(child.text_range().start()),
+                    usize::from(child.text_range().end()),
+                    child.to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            children,
+            vec![
+                (SyntaxKind::Minus, 0, 1, "-".to_owned()),
+                (SyntaxKind::Whitespace, 1, 2, " ".to_owned()),
+                (SyntaxKind::LineComment, 2, 7, "// é".to_owned()),
+                (SyntaxKind::Whitespace, 7, 8, "\n".to_owned()),
+                (SyntaxKind::NumberExpr, 8, 12, "12.5".to_owned()),
+            ]
+        );
+        let number = unary.first_child().expect("number node");
+        assert_eq!(number.parent(), Some(unary));
+        let spaced = parse(" -1 ").expect("small source");
+        assert_eq!(spaced.root.children_with_tokens().count(), 3);
+        assert_eq!(spaced.root.first_child().expect("unary").to_string(), "-1");
+    }
+
+    #[test]
+    fn nests_unary_chains_and_groups() {
+        for (source, kinds) in [
+            (
+                "--1",
+                vec![
+                    SyntaxKind::UnaryExpr,
+                    SyntaxKind::UnaryExpr,
+                    SyntaxKind::NumberExpr,
+                ],
+            ),
+            (
+                "-(001.50)",
+                vec![
+                    SyntaxKind::UnaryExpr,
+                    SyntaxKind::GroupingExpr,
+                    SyntaxKind::NumberExpr,
+                ],
+            ),
+            (
+                "(-1)",
+                vec![
+                    SyntaxKind::GroupingExpr,
+                    SyntaxKind::UnaryExpr,
+                    SyntaxKind::NumberExpr,
+                ],
+            ),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert!(parsed.errors.is_empty(), "{source:?}");
+            assert_eq!(parsed.root.to_string(), source);
+            let mut node = parsed.root;
+            for kind in kinds {
+                node = node.first_child().expect("operand node");
+                assert_eq!(node.kind(), kind, "{source:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn missing_unary_operands_keep_partial_nodes_and_suffixes() {
+        for (source, message, start, end) in [
+            ("-", "expected an expression", 1, 1),
+            ("--", "expected an expression", 2, 2),
+            ("(-)", "expected an expression", 2, 3),
+            ("-é", "invalid token", 1, 3),
+            ("- // é\n", "expected an expression", 8, 8),
+            ("(-1", "expected ')'", 3, 3),
+            ("-1)", "expected end of input", 2, 3),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.root.to_string(), source);
+            assert_eq!(parsed.errors.len(), 1, "{source:?}");
+            let error = &parsed.errors[0];
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
+        }
+        let missing = parse("-").expect("small source");
+        let unary = missing.root.first_child().expect("partial unary");
+        assert_eq!(unary.kind(), SyntaxKind::UnaryExpr);
+        assert_eq!(unary.children().count(), 0);
+        assert_eq!(unary.to_string(), "-");
+        let invalid = parse("-é").expect("small source");
+        let suffix = invalid
+            .root
+            .children_with_tokens()
+            .nth(1)
+            .expect("error token");
+        assert_eq!(suffix.kind(), SyntaxKind::Error);
+        assert_eq!(suffix.to_string(), "é");
+    }
+
+    #[test]
+    fn shares_the_depth_budget_between_unary_and_groups() {
+        for source in [
+            format!("{}1", "-".repeat(MAX_NESTING)),
+            format!("{}(1)", "-".repeat(MAX_NESTING - 1)),
+            format!(
+                "{}{}1{}",
+                "(".repeat(MAX_NESTING / 2),
+                "-".repeat(MAX_NESTING / 2),
+                ")".repeat(MAX_NESTING / 2)
+            ),
+        ] {
+            let parsed = parse(&source).expect("small source");
+            assert!(parsed.errors.is_empty());
+            assert_eq!(parsed.root.to_string(), source);
+            let too_deep = format!("-{source}");
+            let parsed = parse(&too_deep).expect("small source");
+            assert_eq!(parsed.errors.len(), 1);
+            assert_eq!(
+                parsed.errors[0].message,
+                "expression nesting limit exceeded"
+            );
+            assert_eq!(usize::from(parsed.errors[0].range.start()), MAX_NESTING);
+            assert_eq!(usize::from(parsed.errors[0].range.end()), MAX_NESTING + 1);
+            assert_eq!(parsed.root.to_string(), too_deep);
+        }
     }
 }
