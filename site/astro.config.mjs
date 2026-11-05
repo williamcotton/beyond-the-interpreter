@@ -110,6 +110,7 @@ export default defineConfig({
             { label: '12.4 · Keep unary operators in the tree', link: '/chapter-12/12.4-lossless-unary/' },
             { label: '12.5 · Wrap infix expressions with builder checkpoints', link: '/chapter-12/12.5-lossless-infix/' },
             { label: '12.6 · Keep incomplete and unexpected input inspectable', link: '/chapter-12/12.6-incomplete-syntax/' },
+            { label: '12.7 · Read expressions through typed views', link: '/chapter-12/12.7-typed-views/' },
           ],
         },
       ],

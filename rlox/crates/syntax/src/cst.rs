@@ -1,11 +1,16 @@
-use rlox_text::{SourceTooLarge, checked_range, checked_size, slice};
+use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size, slice};
 use rowan::GreenNodeBuilder;
 
-use crate::parser::ParseError;
 use crate::tree::SyntaxNode;
 use crate::{SyntaxKind, Token, scan};
 
 const MAX_NESTING: usize = 64;
+
+#[derive(Debug)]
+pub struct ParseError {
+    pub message: String,
+    pub range: TextRange,
+}
 
 #[derive(Debug)]
 pub struct Parse {
@@ -267,7 +272,7 @@ impl<'src> Parser<'src> {
 mod tests {
     use super::{MAX_NESTING, parse};
     use crate::SyntaxKind;
-    use crate::tree::SyntaxNode;
+    use crate::ast::Expr;
 
     #[test]
     fn groups_numbers_and_owns_trivia_at_the_container() {
@@ -530,38 +535,6 @@ mod tests {
         }
     }
 
-    fn shape(node: &SyntaxNode) -> String {
-        match node.kind() {
-            SyntaxKind::NumberExpr => node.to_string(),
-            SyntaxKind::GroupingExpr => {
-                format!("(group {})", shape(&node.first_child().expect("operand")))
-            }
-            SyntaxKind::UnaryExpr => {
-                format!("(- {})", shape(&node.first_child().expect("operand")))
-            }
-            SyntaxKind::BinaryExpr => {
-                let mut operands = node.children();
-                let left = operands.next().expect("left operand");
-                let right = operands.next().expect("right operand");
-                let operator = node
-                    .children_with_tokens()
-                    .filter_map(|element| element.into_token())
-                    .find(|token| {
-                        matches!(
-                            token.kind(),
-                            SyntaxKind::Plus
-                                | SyntaxKind::Minus
-                                | SyntaxKind::Star
-                                | SyntaxKind::Slash
-                        )
-                    })
-                    .expect("operator");
-                format!("({} {} {})", operator.text(), shape(&left), shape(&right))
-            }
-            kind => panic!("unexpected complete expression kind: {kind:?}"),
-        }
-    }
-
     #[test]
     fn builds_precedence_and_left_association() {
         for (source, expected) in [
@@ -576,16 +549,9 @@ mod tests {
             let parsed = parse(source).expect("small source");
             assert!(parsed.errors.is_empty(), "{source:?}");
             assert_eq!(parsed.root.to_string(), source);
-            assert_eq!(
-                shape(&parsed.root.first_child().expect("expression")),
-                expected
-            );
-            assert_eq!(
-                crate::parser::parse(source)
-                    .expect("owned reference")
-                    .to_prefix(),
-                expected
-            );
+            let view =
+                Expr::cast(parsed.root.first_child().expect("expression")).expect("typed view");
+            assert_eq!(view.to_prefix().as_deref(), Some(expected));
         }
     }
 

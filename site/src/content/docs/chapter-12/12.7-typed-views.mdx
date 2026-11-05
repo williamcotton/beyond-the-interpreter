@@ -1,0 +1,2778 @@
+---
+title: 12.7 — Read expressions through typed views
+slug: chapter-12/12.7-typed-views
+description: Read specific expression fields through Rowan-backed views, preserve missing operand roles, and retire the owned arithmetic parser.
+prev:
+  link: /chapter-12/12.6-incomplete-syntax/
+  label: 12.6 · Keep incomplete and unexpected input inspectable
+next: false
+---
+
+<p className="book-subtitle">Chapter 12 · Building Lossless Trees with Rowan</p>
+
+Our concrete tree keeps the syntax we need, including incomplete
+expressions. Reading it still requires a kind check and child traversal
+every time we want a number token or the right operand of a binary node.
+Let's give those operations names that describe the node we are reading.
+
+The distinction matters for `* 2`. The raw binary node has two expression
+slots: a zero-width `MissingExpr`, followed by `NumberExpr`. A right-operand
+accessor should return the number; a left-operand accessor should return
+`None`. Trying a binary accessor on a number node is a different mistake:
+it isn't a binary node in the first place.
+
+```text title="Check the receiver kind, then read a field"
+NumberExpr node ── BinaryExpr::cast ── None (wrong receiver kind)
+
+BinaryExpr node for * 2 ── BinaryExpr::cast ── Some(binary view)
+                                              left()  → None
+                                              right() → Some(number view)
+```
+
+We'll use small **typed views** around Rowan node handles. Each specific
+type offers only its own fields. Casting checks the receiver's kind once;
+accessors can then focus on children and tokens. The view reads the
+existing tree without copying it into another owned AST.
+
+The [expression types in Crafting Interpreters](https://craftinginterpreters.com/representing-code.html#implementing-syntax-trees)
+provide useful names for literals, grouping and operators. Here those names
+select views of retained source structure.
+
+Start from [12.6](/chapter-12/12.6-incomplete-syntax/), in the **Rust workspace
+directory**. We'll keep the owned parser available until the new views,
+inspection example and parity checks are working, then remove that
+transitional implementation from the active build.
+
+## Name the expression views
+
+Add the module at the top of **`rlox/crates/syntax/src/lib.rs`**, keeping
+`expr` and `parser` for now:
+
+```diff title="rlox/crates/syntax/src/lib.rs · typed-view module"
++pub mod ast;
+ pub mod cst;
+```
+
+Create **`rlox/crates/syntax/src/ast.rs`** with:
+
+```rust title="rlox/crates/syntax/src/ast.rs · view types"
+use crate::SyntaxKind;
+use crate::tree::{SyntaxNode, SyntaxToken};
+
+#[derive(Debug, Clone)]
+pub struct NumberExpr {
+    syntax: SyntaxNode,
+}
+#[derive(Debug, Clone)]
+pub struct GroupingExpr {
+    syntax: SyntaxNode,
+}
+#[derive(Debug, Clone)]
+pub struct UnaryExpr {
+    syntax: SyntaxNode,
+}
+#[derive(Debug, Clone)]
+pub struct BinaryExpr {
+    syntax: SyntaxNode,
+}
+
+#[derive(Debug, Clone)]
+pub enum Expr {
+    Number(NumberExpr),
+    Grouping(GroupingExpr),
+    Unary(UnaryExpr),
+    Binary(BinaryExpr),
+}
+```
+
+Each struct stores one `SyntaxNode` handle. Its field is private, so callers
+must enter through a checked constructor. The `Expr` enum groups the four
+possible views without giving all of them a `left` or `operator` method.
+The Rust Book's [enum discussion](https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html#enum-values)
+explains this use of variants with different associated data.
+
+Unlike our earlier `Expr`, this enum has no recursive child fields and no
+`Box<Expr>`. Getters will create more views from Rowan's children when
+requested. Cloning a view clones its node handle; it doesn't rebuild the
+green tree or discard source text.
+
+Append this implementation to **`ast.rs`**:
+
+```rust title="rlox/crates/syntax/src/ast.rs · expression cast and source handle"
+impl Expr {
+    pub fn cast(syntax: SyntaxNode) -> Option<Self> {
+        match syntax.kind() {
+            SyntaxKind::NumberExpr => Some(Self::Number(NumberExpr { syntax })),
+            SyntaxKind::GroupingExpr => Some(Self::Grouping(GroupingExpr { syntax })),
+            SyntaxKind::UnaryExpr => Some(Self::Unary(UnaryExpr { syntax })),
+            SyntaxKind::BinaryExpr => Some(Self::Binary(BinaryExpr { syntax })),
+            _ => None,
+        }
+    }
+
+    pub fn syntax(&self) -> &SyntaxNode {
+        match self {
+            Self::Number(node) => node.syntax(),
+            Self::Grouping(node) => node.syntax(),
+            Self::Unary(node) => node.syntax(),
+            Self::Binary(node) => node.syntax(),
+        }
+    }
+}
+```
+
+`Expr::cast` accepts expression node kinds and rejects everything else,
+including `Root` and `MissingExpr`. A missing slot therefore isn't a fake
+number or a new executable expression variant. `syntax()` exposes the
+underlying handle for source text, ranges and parent relationships.
+
+## Read number tokens without losing spelling
+
+Append:
+
+```rust title="rlox/crates/syntax/src/ast.rs · number view"
+impl NumberExpr {
+    pub fn cast(syntax: SyntaxNode) -> Option<Self> {
+        if syntax.kind() != SyntaxKind::NumberExpr {
+            return None;
+        }
+        Some(Self { syntax })
+    }
+
+    pub fn syntax(&self) -> &SyntaxNode {
+        &self.syntax
+    }
+
+    pub fn token(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::Number)
+    }
+}
+```
+
+A specific cast accepts only that specific receiver kind. Once it succeeds,
+`token` searches the node's direct token children for `Number`. It returns
+a `SyntaxToken`, preserving spelling and byte range. For `001.50`, its text
+is still `001.50`.
+
+`children_with_tokens` includes both nodes and tokens. Here `filter_map`
+keeps token children and then `find` chooses the requested token kind.
+These are Rowan's [positioned node operations](https://docs.rs/rowan/0.17.0/rowan/api/struct.SyntaxNode.html#method.children_with_tokens).
+We use an `Option` because an accessor can encounter incomplete structure;
+a checked receiver kind alone isn't a guarantee that every field exists.
+
+## Read groups and unary expressions
+
+Append the grouping implementation:
+
+```rust title="rlox/crates/syntax/src/ast.rs · grouping view"
+impl GroupingExpr {
+    pub fn cast(syntax: SyntaxNode) -> Option<Self> {
+        if syntax.kind() != SyntaxKind::GroupingExpr {
+            return None;
+        }
+        Some(Self { syntax })
+    }
+
+    pub fn syntax(&self) -> &SyntaxNode {
+        &self.syntax
+    }
+
+    pub fn inner(&self) -> Option<Expr> {
+        self.syntax.first_child().and_then(Expr::cast)
+    }
+
+    pub fn l_paren_token(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::LeftParen)
+    }
+
+    pub fn r_paren_token(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::RightParen)
+    }
+}
+```
+
+`inner` reads the first node slot and tries to cast it as an expression.
+If it is a `MissingExpr`, the result is `None`. Delimiter getters return
+only actual source tokens. For `(1`, the inner number is present while
+`r_paren_token()` is `None`; recovery hasn't fabricated a close.
+
+Append the unary implementation:
+
+```rust title="rlox/crates/syntax/src/ast.rs · unary view"
+impl UnaryExpr {
+    pub fn cast(syntax: SyntaxNode) -> Option<Self> {
+        if syntax.kind() != SyntaxKind::UnaryExpr {
+            return None;
+        }
+        Some(Self { syntax })
+    }
+
+    pub fn syntax(&self) -> &SyntaxNode {
+        &self.syntax
+    }
+
+    pub fn operator_token(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::Minus)
+    }
+
+    pub fn operand(&self) -> Option<Expr> {
+        self.syntax.first_child().and_then(Expr::cast)
+    }
+}
+```
+
+A unary view has an operator token and an operand. For a lone `-`, the
+operator is present, but casting the missing operand slot returns `None`.
+There is no `operand` method on `NumberExpr` for callers to apply to the
+wrong receiver.
+
+## Choose a binary slot before casting it
+
+Append:
+
+```rust title="rlox/crates/syntax/src/ast.rs · binary view"
+impl BinaryExpr {
+    pub fn cast(syntax: SyntaxNode) -> Option<Self> {
+        if syntax.kind() != SyntaxKind::BinaryExpr {
+            return None;
+        }
+        Some(Self { syntax })
+    }
+
+    pub fn syntax(&self) -> &SyntaxNode {
+        &self.syntax
+    }
+
+    pub fn left(&self) -> Option<Expr> {
+        self.syntax.first_child().and_then(Expr::cast)
+    }
+
+    pub fn right(&self) -> Option<Expr> {
+        self.syntax.children().nth(1).and_then(Expr::cast)
+    }
+
+    pub fn operator_token(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| {
+                matches!(
+                    token.kind(),
+                    SyntaxKind::Plus | SyntaxKind::Minus | SyntaxKind::Star | SyntaxKind::Slash
+                )
+            })
+    }
+}
+```
+
+The order is deliberate: select the first or second **node slot**, then
+cast that node. `children` skips tokens, including trivia and unexpected
+tokens retained by recovery. It still includes `MissingExpr` nodes.
+
+For `* 2`, the first slot casts to `None`, and the second casts to a number
+view. Filtering out missing nodes *before* selecting a position would
+shift that number into the left slot. `1 +` has the opposite absence:
+its left view exists and its right view is `None`.
+
+The operator search inspects direct token children only. A star inside a
+right-hand binary child isn't mistaken for the sum's plus. This keeps
+node structure and source-token access connected.
+
+## Project a complete view for inspection
+
+Our existing observer prints prefix notation. We can keep that useful
+observation without keeping the owned model. Add this method **inside
+`impl Expr`, after `syntax` and before the implementation's closing brace**:
+
+```rust title="rlox/crates/syntax/src/ast.rs · optional prefix projection"
+    pub fn to_prefix(&self) -> Option<String> {
+        match self {
+            Self::Number(node) => {
+                let token = node.token()?;
+                let value = token.text().parse::<f64>().ok()?;
+                Some(value.to_string())
+            }
+            Self::Grouping(node) => {
+                node.l_paren_token()?;
+                node.r_paren_token()?;
+                Some(format!("(group {})", node.inner()?.to_prefix()?))
+            }
+            Self::Unary(node) => Some(format!(
+                "({} {})",
+                node.operator_token()?.text(),
+                node.operand()?.to_prefix()?
+            )),
+            Self::Binary(node) => Some(format!(
+                "({} {} {})",
+                node.operator_token()?.text(),
+                node.left()?.to_prefix()?,
+                node.right()?.to_prefix()?
+            )),
+        }
+    }
+```
+
+Each `?` here operates on `Option`: if a required token or child is absent,
+the projection returns `None`. Grouping also requires both source
+delimiters. The Rust Book explains the same [optional-value contract](https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html#the-option-enum).
+
+Number formatting parses the token's text as `f64`, just as our earlier
+inspector did, so `001.50` displays as `1.5` in prefix notation. This is an
+inspection projection, not evaluation or a lowered runtime representation.
+The node and token still preserve the original spelling.
+
+A `Some` prefix isn't a syntax-validity check: recovery can retain an
+unexpected token alongside otherwise readable fields. Callers must still
+inspect `Parse.errors`. Typed views describe available structure; they
+don't erase diagnostics.
+
+## Check the views while the reference still exists
+
+Append this test module to **`ast.rs`**:
+
+```rust title="rlox/crates/syntax/src/ast.rs · typed-view tests"
+#[cfg(test)]
+mod tests {
+    use super::{BinaryExpr, Expr, GroupingExpr, NumberExpr, UnaryExpr};
+    use crate::{SyntaxKind, cst::parse};
+
+    #[test]
+    fn casts_by_receiver_kind_without_copying_source() {
+        let parsed = parse("001.50").expect("small source");
+        assert!(parsed.errors.is_empty());
+        let raw = parsed.root.first_child().expect("number");
+        assert!(BinaryExpr::cast(raw.clone()).is_none());
+        assert!(GroupingExpr::cast(raw.clone()).is_none());
+        assert!(UnaryExpr::cast(raw.clone()).is_none());
+        assert!(Expr::cast(parsed.root.clone()).is_none());
+        let number = NumberExpr::cast(raw.clone()).expect("number view");
+        assert_eq!(number.syntax(), &raw);
+        assert_eq!(number.token().expect("number token").text(), "001.50");
+        let expr = Expr::cast(raw).expect("expression view");
+        assert_eq!(expr.syntax().to_string(), "001.50");
+        assert_eq!(expr.to_prefix().as_deref(), Some("1.5"));
+    }
+
+    #[test]
+    fn missing_slots_do_not_shift_binary_operands() {
+        for (source, has_left, has_right) in [("1 +", true, false), ("* 2", false, true)] {
+            let parsed = parse(source).expect("small source");
+            assert!(!parsed.errors.is_empty());
+            let raw = parsed.root.first_child().expect("binary");
+            let binary = BinaryExpr::cast(raw.clone()).expect("binary view");
+            assert_eq!(binary.left().is_some(), has_left);
+            assert_eq!(binary.right().is_some(), has_right);
+            assert_eq!(binary.syntax().to_string(), source);
+            if let Some(right) = binary.right() {
+                assert_eq!(right.syntax().to_string(), "2");
+                assert_eq!(usize::from(right.syntax().text_range().start()), 2);
+            }
+            assert!(Expr::cast(raw).expect("expression").to_prefix().is_none());
+        }
+    }
+
+    #[test]
+    fn partial_group_and_unary_views_keep_actual_tokens() {
+        let parsed = parse("-").expect("small source");
+        let unary = UnaryExpr::cast(parsed.root.first_child().expect("unary")).expect("unary view");
+        assert_eq!(unary.operator_token().expect("operator").text(), "-");
+        assert!(unary.operand().is_none());
+        let parsed = parse("(1").expect("small source");
+        let group =
+            GroupingExpr::cast(parsed.root.first_child().expect("group")).expect("group view");
+        assert!(group.l_paren_token().is_some());
+        assert!(group.r_paren_token().is_none());
+        assert_eq!(group.inner().expect("number").syntax().to_string(), "1");
+        assert!(
+            Expr::cast(group.syntax().clone())
+                .expect("expression")
+                .to_prefix()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn accessors_follow_structure_and_preserve_positions() {
+        let parsed = parse("1 + 2 * 3").expect("small source");
+        assert!(parsed.errors.is_empty());
+        let sum = BinaryExpr::cast(parsed.root.first_child().expect("sum")).expect("binary view");
+        assert_eq!(
+            sum.operator_token().expect("operator").kind(),
+            SyntaxKind::Plus
+        );
+        let right = sum.right().expect("product");
+        let Expr::Binary(product) = right else {
+            panic!("right factor must be binary")
+        };
+        assert_eq!(product.operator_token().expect("operator").text(), "*");
+        assert_eq!(usize::from(product.syntax().text_range().start()), 4);
+        assert_eq!(usize::from(product.syntax().text_range().end()), 9);
+        assert_eq!(
+            product.left().expect("left number").to_prefix().as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            product
+                .right()
+                .expect("right number")
+                .to_prefix()
+                .as_deref(),
+            Some("3")
+        );
+    }
+
+    #[test]
+    fn preserves_the_existing_inspection_corpus() {
+        for (source, expected) in [
+            (" 123 // note\n", Some("123")),
+            ("123 456", None),
+            ("", None),
+            ("é", None),
+            ("(123)", Some("(group 123)")),
+            ("((12.5))", Some("(group (group 12.5))")),
+            ("( // é\n123 )", Some("(group 123)")),
+            ("()", None),
+            ("(123", None),
+            ("(123 456)", None),
+            ("123)", None),
+            ("-123", Some("(- 123)")),
+            ("--123", Some("(- (- 123))")),
+            ("-(123)", Some("(- (group 123))")),
+            ("(-123)", Some("(group (- 123))")),
+            ("-", None),
+            ("(-)", None),
+            ("-é", None),
+            ("8 / 4 / 2", Some("(/ (/ 8 4) 2)")),
+            ("8 * 4 / 2", Some("(/ (* 8 4) 2)")),
+            ("8 / (4 / 2)", Some("(/ 8 (group (/ 4 2)))")),
+            ("-8 * 4 / 2", Some("(/ (* (- 8) 4) 2)")),
+            ("8 *", None),
+            ("8 **2", None),
+            ("8 / é", None),
+            ("1 + 2 * 3", Some("(+ 1 (* 2 3))")),
+            ("(1 + 2) * 3", Some("(* (group (+ 1 2)) 3)")),
+            ("8 - 3 - 1", Some("(- (- 8 3) 1)")),
+            ("1--2", Some("(- 1 (- 2))")),
+            ("-(1 + 2) * 3", Some("(* (- (group (+ 1 2))) 3)")),
+            ("1 +", None),
+            ("1 + +2", None),
+            ("1 + é", None),
+            ("(1 + 2", None),
+            (" 001.0 // first\n + 02.00 * 3", Some("(+ 1 (* 2 3))")),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.root.to_string(), source);
+            if let Some(expected) = expected {
+                assert!(parsed.errors.is_empty(), "{source:?}");
+                let view =
+                    Expr::cast(parsed.root.first_child().expect("expression")).expect("typed view");
+                assert_eq!(view.to_prefix().as_deref(), Some(expected), "{source:?}");
+            } else {
+                assert!(!parsed.errors.is_empty(), "{source:?}");
+            }
+        }
+    }
+}
+```
+
+The receiver test rejects casts to unrelated view types. The operand test
+checks both missing-slot directions. Group and unary tests distinguish an
+absent token or operand from the wrong receiver kind. Position checks
+connect the view to its original tree; the inspection corpus retains the
+valid prefix observations and rejects the same malformed source cases.
+
+Now migrate the **existing test module in `cst.rs`** to use these views
+instead of its private `shape` projection. Apply this patch, keeping the
+owned-parser comparison for this verification step:
+
+```diff title="rlox/crates/syntax/src/cst.rs · test projection through views"
+@@ -3,5 +3,5 @@
+     use super::{MAX_NESTING, parse};
+     use crate::SyntaxKind;
+-    use crate::tree::SyntaxNode;
++    use crate::ast::Expr;
+
+     #[test]
+@@ -266,36 +266,4 @@
+     }
+
+-    fn shape(node: &SyntaxNode) -> String {
+-        match node.kind() {
+-            SyntaxKind::NumberExpr => node.to_string(),
+-            SyntaxKind::GroupingExpr => {
+-                format!("(group {})", shape(&node.first_child().expect("operand")))
+-            }
+-            SyntaxKind::UnaryExpr => {
+-                format!("(- {})", shape(&node.first_child().expect("operand")))
+-            }
+-            SyntaxKind::BinaryExpr => {
+-                let mut operands = node.children();
+-                let left = operands.next().expect("left operand");
+-                let right = operands.next().expect("right operand");
+-                let operator = node
+-                    .children_with_tokens()
+-                    .filter_map(|element| element.into_token())
+-                    .find(|token| {
+-                        matches!(
+-                            token.kind(),
+-                            SyntaxKind::Plus
+-                                | SyntaxKind::Minus
+-                                | SyntaxKind::Star
+-                                | SyntaxKind::Slash
+-                        )
+-                    })
+-                    .expect("operator");
+-                format!("({} {} {})", operator.text(), shape(&left), shape(&right))
+-            }
+-            kind => panic!("unexpected complete expression kind: {kind:?}"),
+-        }
+-    }
+-
+     #[test]
+     fn builds_precedence_and_left_association() {
+@@ -312,8 +280,7 @@
+             assert!(parsed.errors.is_empty(), "{source:?}");
+             assert_eq!(parsed.root.to_string(), source);
+-            assert_eq!(
+-                shape(&parsed.root.first_child().expect("expression")),
+-                expected
+-            );
++            let view =
++                Expr::cast(parsed.root.first_child().expect("expression")).expect("typed view");
++            assert_eq!(view.to_prefix().as_deref(), Some(expected));
+             assert_eq!(
+                 crate::parser::parse(source)
+```
+
+Run:
+
+```sh
+cargo check --workspace --all-targets
+cargo test -p rlox-syntax
+```
+
+The old parser is still compiled, and its comparison checks should still
+pass alongside the new typed projection, source/recovery cases and
+resource-limit checks. Resolve any failure before retiring the reference.
+
+## Migrate the prefix observer
+
+Apply this patch to **`rlox/crates/syntax/examples/parse_expression.rs`**.
+The source list stays unchanged:
+
+```diff title="rlox/crates/syntax/examples/parse_expression.rs · inspect the CST through views"
+@@ -1,3 +1,3 @@
+-use rlox_syntax::parser::{ParseFailure, parse};
++use rlox_syntax::{ast::Expr, cst::parse};
+
+ fn main() {
+@@ -40,12 +40,27 @@
+     ] {
+         match parse(source) {
+-            Ok(expr) => println!("{source:?} => {}", expr.to_prefix()),
+-            Err(ParseFailure::Syntax(error)) => println!(
+-                "{source:?} => {} [{}..{})",
+-                error.message,
+-                usize::from(error.range.start()),
+-                usize::from(error.range.end()),
+-            ),
+-            Err(ParseFailure::SourceTooLarge(error)) => println!("{source:?} => {error}"),
++            Ok(parsed) => {
++                if parsed.errors.is_empty() {
++                    let prefix = parsed
++                        .root
++                        .first_child()
++                        .and_then(Expr::cast)
++                        .and_then(|expr| expr.to_prefix());
++                    println!(
++                        "{source:?} => {}",
++                        prefix.as_deref().unwrap_or("<incomplete>")
++                    );
++                } else {
++                    for error in parsed.errors {
++                        println!(
++                            "{source:?} => {} [{}..{})",
++                            error.message,
++                            usize::from(error.range.start()),
++                            usize::from(error.range.end())
++                        );
++                    }
++                }
++            }
++            Err(error) => println!("{source:?} => {error}"),
+         }
+     }
+```
+
+The observer checks errors before displaying a prefix. For malformed input
+it prints the located diagnostics; on a representable source with all
+required fields it uses the typed view. A file-size failure still has no
+invented syntax range.
+
+Run:
+
+```sh
+cargo run -p rlox-syntax --example parse_expression
+```
+
+The familiar successful observations should include:
+
+```text
+"1 + 2 * 3" => (+ 1 (* 2 3))
+"-(1 + 2) * 3" => (* (- (group (+ 1 2))) 3)
+" 001.0 // first\n + 02.00 * 3" => (+ 1 (* 2 3))
+```
+
+For `1 +`, the observer should still report
+`expected an expression [3..3)`, while the concrete tree retains its
+binary node and empty right slot. The `parse_cst` example remains available
+for the complete source-preserving tree display.
+
+## Retire the owned arithmetic implementation
+
+The owned model and parser have served their teaching purpose. The complete
+listings in [10.3](/chapter-10/10.3-expression-printer/) and
+[12.1](/chapter-12/12.1-rowan-coordinates/) preserve those earlier reader
+states. With the checks above passing, we can finish the transition to one
+active grammar implementation.
+
+`cst` still imports the old parser's `ParseError`. Give that record to the
+module that now produces it, keeping its fields. Also remove the old
+comparison assertion, retaining the literal prefix expectations and the
+new typed-view assertion. Apply this patch to **`cst.rs`**:
+
+```diff title="rlox/crates/syntax/src/cst.rs · own the error record and retire the reference assertion"
+@@ -1,10 +1,15 @@
+-use rlox_text::{SourceTooLarge, checked_range, checked_size, slice};
++use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size, slice};
+ use rowan::GreenNodeBuilder;
+
+-use crate::parser::ParseError;
+ use crate::tree::SyntaxNode;
+ use crate::{SyntaxKind, Token, scan};
+
+ const MAX_NESTING: usize = 64;
++
++#[derive(Debug)]
++pub struct ParseError {
++    pub message: String,
++    pub range: TextRange,
++}
+
+ #[derive(Debug)]
+@@ -548,10 +553,4 @@
+                 Expr::cast(parsed.root.first_child().expect("expression")).expect("typed view");
+             assert_eq!(view.to_prefix().as_deref(), Some(expected));
+-            assert_eq!(
+-                crate::parser::parse(source)
+-                    .expect("owned reference")
+-                    .to_prefix(),
+-                expected
+-            );
+         }
+     }
+```
+
+The error's new path is `rlox_syntax::cst::ParseError`; callers inspecting
+`parsed.errors` keep the same message/range fields. No parsing or recovery
+rule changes here.
+
+Remove the old module exports from **`lib.rs`**:
+
+```diff title="rlox/crates/syntax/src/lib.rs · retire the owned modules"
+ pub mod ast;
+ pub mod cst;
+-pub mod expr;
+-pub mod parser;
+ pub mod tree;
+```
+
+Then delete these three files from the **Rust workspace directory**:
+
+```sh
+rm crates/syntax/src/expr.rs crates/syntax/src/parser.rs crates/syntax/examples/expression_shape.rs
+```
+
+The last file is the manual-construction example from Chapter 10. The
+source-based observer now uses typed views instead. Complete this small
+retirement group before checking compilation: its obsolete exports,
+imports and example must leave the active build together.
+
+Run:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo run -p rlox-syntax --example parse_expression
+cargo run -p rlox-syntax --example parse_cst
+```
+
+The prefix observations, lossless trees, errors and resource limits should
+keep working. Our Chapter 12 endpoint now has a lossless arithmetic parser,
+inspectable incomplete syntax and typed expression views. These views
+remain tied to source; execution will need its own representation when
+we reach that part of the book.
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/src/ast.rs</summary>
+
+```rust title="rlox/crates/syntax/src/ast.rs · complete resulting file"
+use crate::SyntaxKind;
+use crate::tree::{SyntaxNode, SyntaxToken};
+
+#[derive(Debug, Clone)]
+pub struct NumberExpr {
+    syntax: SyntaxNode,
+}
+#[derive(Debug, Clone)]
+pub struct GroupingExpr {
+    syntax: SyntaxNode,
+}
+#[derive(Debug, Clone)]
+pub struct UnaryExpr {
+    syntax: SyntaxNode,
+}
+#[derive(Debug, Clone)]
+pub struct BinaryExpr {
+    syntax: SyntaxNode,
+}
+
+#[derive(Debug, Clone)]
+pub enum Expr {
+    Number(NumberExpr),
+    Grouping(GroupingExpr),
+    Unary(UnaryExpr),
+    Binary(BinaryExpr),
+}
+
+impl Expr {
+    pub fn cast(syntax: SyntaxNode) -> Option<Self> {
+        match syntax.kind() {
+            SyntaxKind::NumberExpr => Some(Self::Number(NumberExpr { syntax })),
+            SyntaxKind::GroupingExpr => Some(Self::Grouping(GroupingExpr { syntax })),
+            SyntaxKind::UnaryExpr => Some(Self::Unary(UnaryExpr { syntax })),
+            SyntaxKind::BinaryExpr => Some(Self::Binary(BinaryExpr { syntax })),
+            _ => None,
+        }
+    }
+
+    pub fn syntax(&self) -> &SyntaxNode {
+        match self {
+            Self::Number(node) => node.syntax(),
+            Self::Grouping(node) => node.syntax(),
+            Self::Unary(node) => node.syntax(),
+            Self::Binary(node) => node.syntax(),
+        }
+    }
+
+    pub fn to_prefix(&self) -> Option<String> {
+        match self {
+            Self::Number(node) => {
+                let token = node.token()?;
+                let value = token.text().parse::<f64>().ok()?;
+                Some(value.to_string())
+            }
+            Self::Grouping(node) => {
+                node.l_paren_token()?;
+                node.r_paren_token()?;
+                Some(format!("(group {})", node.inner()?.to_prefix()?))
+            }
+            Self::Unary(node) => Some(format!(
+                "({} {})",
+                node.operator_token()?.text(),
+                node.operand()?.to_prefix()?
+            )),
+            Self::Binary(node) => Some(format!(
+                "({} {} {})",
+                node.operator_token()?.text(),
+                node.left()?.to_prefix()?,
+                node.right()?.to_prefix()?
+            )),
+        }
+    }
+}
+
+impl NumberExpr {
+    pub fn cast(syntax: SyntaxNode) -> Option<Self> {
+        if syntax.kind() != SyntaxKind::NumberExpr {
+            return None;
+        }
+        Some(Self { syntax })
+    }
+
+    pub fn syntax(&self) -> &SyntaxNode {
+        &self.syntax
+    }
+
+    pub fn token(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::Number)
+    }
+}
+
+impl GroupingExpr {
+    pub fn cast(syntax: SyntaxNode) -> Option<Self> {
+        if syntax.kind() != SyntaxKind::GroupingExpr {
+            return None;
+        }
+        Some(Self { syntax })
+    }
+
+    pub fn syntax(&self) -> &SyntaxNode {
+        &self.syntax
+    }
+
+    pub fn inner(&self) -> Option<Expr> {
+        self.syntax.first_child().and_then(Expr::cast)
+    }
+
+    pub fn l_paren_token(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::LeftParen)
+    }
+
+    pub fn r_paren_token(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::RightParen)
+    }
+}
+
+impl UnaryExpr {
+    pub fn cast(syntax: SyntaxNode) -> Option<Self> {
+        if syntax.kind() != SyntaxKind::UnaryExpr {
+            return None;
+        }
+        Some(Self { syntax })
+    }
+
+    pub fn syntax(&self) -> &SyntaxNode {
+        &self.syntax
+    }
+
+    pub fn operator_token(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::Minus)
+    }
+
+    pub fn operand(&self) -> Option<Expr> {
+        self.syntax.first_child().and_then(Expr::cast)
+    }
+}
+
+impl BinaryExpr {
+    pub fn cast(syntax: SyntaxNode) -> Option<Self> {
+        if syntax.kind() != SyntaxKind::BinaryExpr {
+            return None;
+        }
+        Some(Self { syntax })
+    }
+
+    pub fn syntax(&self) -> &SyntaxNode {
+        &self.syntax
+    }
+
+    pub fn left(&self) -> Option<Expr> {
+        self.syntax.first_child().and_then(Expr::cast)
+    }
+
+    pub fn right(&self) -> Option<Expr> {
+        self.syntax.children().nth(1).and_then(Expr::cast)
+    }
+
+    pub fn operator_token(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| {
+                matches!(
+                    token.kind(),
+                    SyntaxKind::Plus | SyntaxKind::Minus | SyntaxKind::Star | SyntaxKind::Slash
+                )
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BinaryExpr, Expr, GroupingExpr, NumberExpr, UnaryExpr};
+    use crate::{SyntaxKind, cst::parse};
+
+    #[test]
+    fn casts_by_receiver_kind_without_copying_source() {
+        let parsed = parse("001.50").expect("small source");
+        assert!(parsed.errors.is_empty());
+        let raw = parsed.root.first_child().expect("number");
+        assert!(BinaryExpr::cast(raw.clone()).is_none());
+        assert!(GroupingExpr::cast(raw.clone()).is_none());
+        assert!(UnaryExpr::cast(raw.clone()).is_none());
+        assert!(Expr::cast(parsed.root.clone()).is_none());
+        let number = NumberExpr::cast(raw.clone()).expect("number view");
+        assert_eq!(number.syntax(), &raw);
+        assert_eq!(number.token().expect("number token").text(), "001.50");
+        let expr = Expr::cast(raw).expect("expression view");
+        assert_eq!(expr.syntax().to_string(), "001.50");
+        assert_eq!(expr.to_prefix().as_deref(), Some("1.5"));
+    }
+
+    #[test]
+    fn missing_slots_do_not_shift_binary_operands() {
+        for (source, has_left, has_right) in [("1 +", true, false), ("* 2", false, true)] {
+            let parsed = parse(source).expect("small source");
+            assert!(!parsed.errors.is_empty());
+            let raw = parsed.root.first_child().expect("binary");
+            let binary = BinaryExpr::cast(raw.clone()).expect("binary view");
+            assert_eq!(binary.left().is_some(), has_left);
+            assert_eq!(binary.right().is_some(), has_right);
+            assert_eq!(binary.syntax().to_string(), source);
+            if let Some(right) = binary.right() {
+                assert_eq!(right.syntax().to_string(), "2");
+                assert_eq!(usize::from(right.syntax().text_range().start()), 2);
+            }
+            assert!(Expr::cast(raw).expect("expression").to_prefix().is_none());
+        }
+    }
+
+    #[test]
+    fn partial_group_and_unary_views_keep_actual_tokens() {
+        let parsed = parse("-").expect("small source");
+        let unary = UnaryExpr::cast(parsed.root.first_child().expect("unary")).expect("unary view");
+        assert_eq!(unary.operator_token().expect("operator").text(), "-");
+        assert!(unary.operand().is_none());
+        let parsed = parse("(1").expect("small source");
+        let group =
+            GroupingExpr::cast(parsed.root.first_child().expect("group")).expect("group view");
+        assert!(group.l_paren_token().is_some());
+        assert!(group.r_paren_token().is_none());
+        assert_eq!(group.inner().expect("number").syntax().to_string(), "1");
+        assert!(
+            Expr::cast(group.syntax().clone())
+                .expect("expression")
+                .to_prefix()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn accessors_follow_structure_and_preserve_positions() {
+        let parsed = parse("1 + 2 * 3").expect("small source");
+        assert!(parsed.errors.is_empty());
+        let sum = BinaryExpr::cast(parsed.root.first_child().expect("sum")).expect("binary view");
+        assert_eq!(
+            sum.operator_token().expect("operator").kind(),
+            SyntaxKind::Plus
+        );
+        let right = sum.right().expect("product");
+        let Expr::Binary(product) = right else {
+            panic!("right factor must be binary")
+        };
+        assert_eq!(product.operator_token().expect("operator").text(), "*");
+        assert_eq!(usize::from(product.syntax().text_range().start()), 4);
+        assert_eq!(usize::from(product.syntax().text_range().end()), 9);
+        assert_eq!(
+            product.left().expect("left number").to_prefix().as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            product
+                .right()
+                .expect("right number")
+                .to_prefix()
+                .as_deref(),
+            Some("3")
+        );
+    }
+
+    #[test]
+    fn preserves_the_existing_inspection_corpus() {
+        for (source, expected) in [
+            (" 123 // note\n", Some("123")),
+            ("123 456", None),
+            ("", None),
+            ("é", None),
+            ("(123)", Some("(group 123)")),
+            ("((12.5))", Some("(group (group 12.5))")),
+            ("( // é\n123 )", Some("(group 123)")),
+            ("()", None),
+            ("(123", None),
+            ("(123 456)", None),
+            ("123)", None),
+            ("-123", Some("(- 123)")),
+            ("--123", Some("(- (- 123))")),
+            ("-(123)", Some("(- (group 123))")),
+            ("(-123)", Some("(group (- 123))")),
+            ("-", None),
+            ("(-)", None),
+            ("-é", None),
+            ("8 / 4 / 2", Some("(/ (/ 8 4) 2)")),
+            ("8 * 4 / 2", Some("(/ (* 8 4) 2)")),
+            ("8 / (4 / 2)", Some("(/ 8 (group (/ 4 2)))")),
+            ("-8 * 4 / 2", Some("(/ (* (- 8) 4) 2)")),
+            ("8 *", None),
+            ("8 **2", None),
+            ("8 / é", None),
+            ("1 + 2 * 3", Some("(+ 1 (* 2 3))")),
+            ("(1 + 2) * 3", Some("(* (group (+ 1 2)) 3)")),
+            ("8 - 3 - 1", Some("(- (- 8 3) 1)")),
+            ("1--2", Some("(- 1 (- 2))")),
+            ("-(1 + 2) * 3", Some("(* (- (group (+ 1 2))) 3)")),
+            ("1 +", None),
+            ("1 + +2", None),
+            ("1 + é", None),
+            ("(1 + 2", None),
+            (" 001.0 // first\n + 02.00 * 3", Some("(+ 1 (* 2 3))")),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.root.to_string(), source);
+            if let Some(expected) = expected {
+                assert!(parsed.errors.is_empty(), "{source:?}");
+                let view =
+                    Expr::cast(parsed.root.first_child().expect("expression")).expect("typed view");
+                assert_eq!(view.to_prefix().as_deref(), Some(expected), "{source:?}");
+            } else {
+                assert!(!parsed.errors.is_empty(), "{source:?}");
+            }
+        }
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/src/lib.rs</summary>
+
+```rust title="rlox/crates/syntax/src/lib.rs · complete resulting file"
+pub mod ast;
+pub mod cst;
+pub mod tree;
+
+use logos::Logos;
+
+use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size};
+
+macro_rules! syntax_kinds {
+    ($( $(#[$attribute:meta])* $kind:ident, )*) => {
+        #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[repr(u16)]
+        pub enum SyntaxKind {
+            $( $(#[$attribute])* $kind, )*
+        }
+
+        impl SyntaxKind {
+            pub fn into_raw(self) -> rowan::SyntaxKind {
+                rowan::SyntaxKind(self as u16)
+            }
+
+            pub fn from_raw(raw: rowan::SyntaxKind) -> Option<Self> {
+                match raw.0 {
+                    $(value if value == Self::$kind as u16 => Some(Self::$kind),)*
+                    _ => None,
+                }
+            }
+
+            #[cfg(test)]
+            const ALL: &'static [Self] = &[$(Self::$kind,)*];
+        }
+    };
+}
+
+syntax_kinds! {
+    #[token("(")]
+    LeftParen,
+    #[token(")")]
+    RightParen,
+    #[token("{")]
+    LeftBrace,
+    #[token("}")]
+    RightBrace,
+    #[token(",")]
+    Comma,
+    #[token(".")]
+    Dot,
+    #[token("-")]
+    Minus,
+    #[token("+")]
+    Plus,
+    #[token(";")]
+    Semicolon,
+    #[token("/")]
+    Slash,
+    #[token("*")]
+    Star,
+    #[token("!")]
+    Bang,
+    #[token("!=")]
+    BangEqual,
+    #[token("=")]
+    Equal,
+    #[token("==")]
+    EqualEqual,
+    #[token(">")]
+    Greater,
+    #[token(">=")]
+    GreaterEqual,
+    #[token("<")]
+    Less,
+    #[token("<=")]
+    LessEqual,
+    #[token("and")]
+    And,
+    #[token("class")]
+    Class,
+    #[token("else")]
+    Else,
+    #[token("false")]
+    False,
+    #[token("for")]
+    For,
+    #[token("fun")]
+    Fun,
+    #[token("if")]
+    If,
+    #[token("nil")]
+    Nil,
+    #[token("or")]
+    Or,
+    #[token("print")]
+    Print,
+    #[token("return")]
+    Return,
+    #[token("super")]
+    Super,
+    #[token("this")]
+    This,
+    #[token("true")]
+    True,
+    #[token("var")]
+    Var,
+    #[token("while")]
+    While,
+    #[regex(r#""[^"]*""#)]
+    String,
+    #[regex(r"[0-9]+(\.[0-9]+)?")]
+    Number,
+    #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
+    Identifier,
+    #[regex(r"[ \t\r\n]+")]
+    Whitespace,
+    #[regex(r"//[^\n]*", allow_greedy = true)]
+    LineComment,
+    Error,
+    Root,
+    NumberExpr,
+    GroupingExpr,
+    UnaryExpr,
+    BinaryExpr,
+    MissingExpr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub kind: SyntaxKind,
+    pub range: TextRange,
+}
+
+pub fn scan(source: &str) -> Result<Vec<Token>, SourceTooLarge> {
+    checked_size(source.len())?;
+    let mut tokens = Vec::new();
+
+    for (result, span) in SyntaxKind::lexer(source).spanned() {
+        let kind = match result {
+            Ok(kind) => kind,
+            Err(()) => SyntaxKind::Error,
+        };
+        let range = checked_range(
+            checked_size(span.start).expect("validated source length"),
+            checked_size(span.end).expect("validated source length"),
+        )
+        .expect("Logos spans are ordered");
+
+        tokens.push(Token { kind, range });
+    }
+
+    Ok(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SyntaxKind, Token, scan};
+    use rlox_text::{TextSize, checked_range, checked_size, slice};
+
+    #[test]
+    fn scans_single_character_tokens() {
+        let tokens = scan("()=!").expect("small test source");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::RightParen,
+                    range: checked_range(TextSize::new(1), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: checked_range(TextSize::new(2), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: checked_range(TextSize::new(3), TextSize::new(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_source_has_no_tokens() {
+        assert!(scan("").expect("small test source").is_empty());
+    }
+
+    #[test]
+    fn consumes_a_whole_unsupported_character() {
+        let source = "é!";
+        let tokens = scan(source).expect("small test source");
+
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, SyntaxKind::Error);
+        assert_eq!(slice(source, tokens[0].range), Some("é"));
+        assert_eq!(tokens[1].kind, SyntaxKind::Bang);
+        assert_eq!(slice(source, tokens[1].range), Some("!"));
+    }
+
+    #[test]
+    fn scans_adjacent_paired_operators() {
+        assert_eq!(
+            scan("!===").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::EqualEqual,
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_lookahead_preserves_the_next_character() {
+        assert_eq!(
+            scan("!é(").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Bang,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(1), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::LeftParen,
+                    range: checked_range(TextSize::new(3), TextSize::new(4)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn single_operator_can_end_the_source() {
+        for (source, kind) in [("!", SyntaxKind::Bang), ("=", SyntaxKind::Equal)] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn identifiers_stop_before_operators() {
+        assert_eq!(
+            scan("a_2!=other").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: checked_range(TextSize::new(3), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(5), TextSize::new(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn identifiers_can_end_the_source() {
+        for source in ["_", "A9", "printer"] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn number_and_name_boundaries_preserve_unknown_characters() {
+        assert_eq!(
+            scan("2aé_b").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Number,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(1), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(4), TextSize::new(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_whitespace_between_tokens() {
+        assert_eq!(
+            scan("a \t\r\n!= b").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(1), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::BangEqual,
+                    range: checked_range(TextSize::new(5), TextSize::new(7)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(7), TextSize::new(8)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(8), TextSize::new(9)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn whitespace_uses_the_lox_character_set() {
+        for source in ["\u{000b}", "\u{000c}", "\u{00a0}"] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_ranges_cover_the_original_source() {
+        for source in [
+            "",
+            " \t\r\n",
+            "a \t\r\n!= b",
+            "a_2!=other",
+            "2aé_b",
+            "a\u{00a0}b",
+            "/",
+            "/name",
+            "//",
+            "//\n",
+            "//é\r\nname",
+            "///",
+            "a//x\nb",
+            "{},.-+;*",
+            "<=>=<>",
+            "<==>==",
+            "a<=b!=c>=d",
+            "(a+b)*c;",
+            "print printer",
+            "for forest",
+            "class classify",
+            "if(if_1)",
+            "return // print\nprinter",
+            "0 001 123.456",
+            "123. .5 -12 +3.5 1.2.3",
+            "123abc a2",
+            "print 0.5;//é\n123.",
+            r#"print "é";"#,
+            r#""a""b";"#,
+            r#""\"name"#,
+            "\"first\nsecond\" // done\n0.5",
+            "\"",
+            "\"é",
+            "\"first\n// still inside",
+            r#""ok""é"#,
+        ] {
+            let mut offset = 0;
+            let mut reconstructed = String::new();
+
+            for token in scan(source).expect("small test source") {
+                let text = slice(source, token.range).expect("valid UTF-8 source slice");
+                assert!(!text.is_empty());
+                let end = offset + text.len();
+                let expected = checked_range(
+                    checked_size(offset).expect("representable offset"),
+                    checked_size(end).expect("representable offset"),
+                )
+                .unwrap();
+                assert_eq!(token.range, expected);
+
+                reconstructed.push_str(text);
+                offset = end;
+            }
+
+            assert_eq!(offset, source.len());
+            assert_eq!(reconstructed, source);
+        }
+    }
+
+    #[test]
+    fn recognizes_single_slashes() {
+        assert_eq!(
+            scan("/").expect("small test source"),
+            vec![Token {
+                kind: SyntaxKind::Slash,
+                range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+            }]
+        );
+        assert_eq!(
+            scan("/name").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Slash,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(1), TextSize::new(5)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_leave_the_line_feed_unread() {
+        assert_eq!(
+            scan("//é\r\nname").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LineComment,
+                    range: checked_range(TextSize::new(0), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(6), TextSize::new(10)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comments_can_end_at_eof() {
+        for source in ["//", "//é", "///"] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::LineComment,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_characters_remain_separate_tokens() {
+        assert_eq!(
+            scan("@é💥").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(1), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(3), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_remaining_single_character_punctuation() {
+        for (source, kind) in [
+            ("{", SyntaxKind::LeftBrace),
+            ("}", SyntaxKind::RightBrace),
+            (",", SyntaxKind::Comma),
+            (".", SyntaxKind::Dot),
+            ("-", SyntaxKind::Minus),
+            ("+", SyntaxKind::Plus),
+            (";", SyntaxKind::Semicolon),
+            ("*", SyntaxKind::Star),
+            ("<", SyntaxKind::Less),
+            (">", SyntaxKind::Greater),
+        ] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind,
+                    range: checked_range(TextSize::new(0), TextSize::new(1)).unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn recognizes_adjacent_comparison_operators() {
+        assert_eq!(
+            scan("<=>=<>").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: checked_range(TextSize::new(2), TextSize::new(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Less,
+                    range: checked_range(TextSize::new(4), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Greater,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn comparison_pairs_leave_extra_equals_tokens() {
+        assert_eq!(
+            scan("<==>==").expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::LessEqual,
+                    range: checked_range(TextSize::new(0), TextSize::new(2)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: checked_range(TextSize::new(2), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::GreaterEqual,
+                    range: checked_range(TextSize::new(3), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Equal,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn recognizes_reserved_words() {
+        for (source, kind) in [
+            ("and", SyntaxKind::And),
+            ("class", SyntaxKind::Class),
+            ("else", SyntaxKind::Else),
+            ("false", SyntaxKind::False),
+            ("for", SyntaxKind::For),
+            ("fun", SyntaxKind::Fun),
+            ("if", SyntaxKind::If),
+            ("nil", SyntaxKind::Nil),
+            ("or", SyntaxKind::Or),
+            ("print", SyntaxKind::Print),
+            ("return", SyntaxKind::Return),
+            ("super", SyntaxKind::Super),
+            ("this", SyntaxKind::This),
+            ("true", SyntaxKind::True),
+            ("var", SyntaxKind::Var),
+            ("while", SyntaxKind::While),
+        ] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn keywords_do_not_split_longer_identifiers() {
+        for source in [
+            "forest",
+            "printer",
+            "classify",
+            "true_value",
+            "_if",
+            "Print",
+        ] {
+            assert_eq!(
+                scan(source).expect("small test source"),
+                vec![Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn token_spelling_comes_from_the_source() {
+        let source = "print printer";
+        let tokens = scan(source).expect("small test source");
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::Print,
+                    range: checked_range(TextSize::new(0), TextSize::new(5)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Whitespace,
+                    range: checked_range(TextSize::new(5), TextSize::new(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(6), TextSize::new(13)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(slice(source, tokens[0].range), Some("print"));
+        assert_eq!(slice(source, tokens[1].range), Some(" "));
+        assert_eq!(slice(source, tokens[2].range), Some("printer"));
+    }
+
+    #[test]
+    fn recognizes_number_spellings() {
+        for source in ["0", "123", "001", "0.5", "123.456", "00.50"] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Number,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+            assert_eq!(slice(source, tokens[0].range), Some(source));
+        }
+    }
+
+    #[test]
+    fn numbers_leave_dots_signs_and_names_separate() {
+        for (source, expected) in [
+            (
+                "123.",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Dot, 3, 4)],
+            ),
+            (
+                ".5",
+                vec![(SyntaxKind::Dot, 0, 1), (SyntaxKind::Number, 1, 2)],
+            ),
+            (
+                "-12",
+                vec![(SyntaxKind::Minus, 0, 1), (SyntaxKind::Number, 1, 3)],
+            ),
+            (
+                "+3.5",
+                vec![(SyntaxKind::Plus, 0, 1), (SyntaxKind::Number, 1, 4)],
+            ),
+            (
+                "1.2.3",
+                vec![
+                    (SyntaxKind::Number, 0, 3),
+                    (SyntaxKind::Dot, 3, 4),
+                    (SyntaxKind::Number, 4, 5),
+                ],
+            ),
+            (
+                "123abc",
+                vec![(SyntaxKind::Number, 0, 3), (SyntaxKind::Identifier, 3, 6)],
+            ),
+            ("a2", vec![(SyntaxKind::Identifier, 0, 2)]),
+        ] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(tokens.len(), expected.len(), "{source}");
+            for (token, (kind, start, end)) in tokens.iter().zip(expected) {
+                assert_eq!(token.kind, kind, "{source}");
+                assert_eq!(
+                    token.range,
+                    checked_range(
+                        checked_size(start).expect("representable offset"),
+                        checked_size(end).expect("representable offset")
+                    )
+                    .unwrap(),
+                    "{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn keeps_complete_string_spellings() {
+        for source in [
+            r#""""#,
+            r#""hello""#,
+            r#""// 123 ; print""#,
+            "\"é💥\"",
+            "\"first\nsecond\"",
+            r#""\n""#,
+        ] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+            assert_eq!(slice(source, tokens[0].range), Some(source));
+        }
+    }
+
+    #[test]
+    fn strings_stop_at_the_next_quote() {
+        let source = r#""a""b";"#;
+        let tokens = scan(source).expect("small test source");
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(3), TextSize::new(6)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Semicolon,
+                    range: checked_range(TextSize::new(6), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(slice(source, tokens[0].range), Some(r#""a""#));
+        assert_eq!(slice(source, tokens[1].range), Some(r#""b""#));
+    }
+
+    #[test]
+    fn backslash_does_not_escape_a_quote() {
+        let source = r#""\"name"#;
+        assert_eq!(
+            scan(source).expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(0), TextSize::new(3)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Identifier,
+                    range: checked_range(TextSize::new(3), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn unterminated_strings_cover_the_remaining_source() {
+        for source in ["\"", "\"é", "\"first\n// still inside"] {
+            let tokens = scan(source).expect("small test source");
+            assert_eq!(
+                tokens,
+                vec![Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(
+                        TextSize::new(0),
+                        checked_size(source.len()).expect("representable offset")
+                    )
+                    .unwrap(),
+                }]
+            );
+            assert_eq!(slice(source, tokens[0].range), Some(source));
+        }
+
+        assert_eq!(
+            scan(r#""ok""é"#).expect("small test source"),
+            vec![
+                Token {
+                    kind: SyntaxKind::String,
+                    range: checked_range(TextSize::new(0), TextSize::new(4)).unwrap(),
+                },
+                Token {
+                    kind: SyntaxKind::Error,
+                    range: checked_range(TextSize::new(4), TextSize::new(7)).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn kind_conversion_accepts_only_declared_kinds() {
+        for &kind in SyntaxKind::ALL {
+            assert_eq!(SyntaxKind::from_raw(kind.into_raw()), Some(kind));
+        }
+        assert_eq!(SyntaxKind::from_raw(rowan::SyntaxKind(u16::MAX)), None);
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/src/cst.rs</summary>
+
+```rust title="rlox/crates/syntax/src/cst.rs · complete resulting file"
+use rlox_text::{SourceTooLarge, TextRange, checked_range, checked_size, slice};
+use rowan::GreenNodeBuilder;
+
+use crate::tree::SyntaxNode;
+use crate::{SyntaxKind, Token, scan};
+
+const MAX_NESTING: usize = 64;
+
+#[derive(Debug)]
+pub struct ParseError {
+    pub message: String,
+    pub range: TextRange,
+}
+
+#[derive(Debug)]
+pub struct Parse {
+    pub root: SyntaxNode,
+    pub errors: Vec<ParseError>,
+}
+
+pub fn parse(source: &str) -> Result<Parse, SourceTooLarge> {
+    let mut parser = Parser::new(source)?;
+    parser.builder.start_node(SyntaxKind::Root.into_raw());
+    if let Err(error) = parser.expression(0) {
+        parser.errors.push(error);
+        while parser.current < parser.tokens.len() {
+            parser.bump();
+        }
+    } else {
+        parser.eat_trivia();
+        while parser.peek().is_some() {
+            let error = parser.error("expected end of input");
+            parser.errors.push(error);
+            parser.bump();
+            parser.eat_trivia();
+        }
+    }
+    parser.builder.finish_node();
+    let root = SyntaxNode::new_root(parser.builder.finish());
+    Ok(Parse {
+        root,
+        errors: parser.errors,
+    })
+}
+
+struct Parser<'src> {
+    source: &'src str,
+    tokens: Vec<Token>,
+    current: usize,
+    errors: Vec<ParseError>,
+    builder: GreenNodeBuilder<'static>,
+}
+
+impl<'src> Parser<'src> {
+    fn new(source: &'src str) -> Result<Self, SourceTooLarge> {
+        Ok(Self {
+            source,
+            tokens: scan(source)?,
+            current: 0,
+            errors: Vec::new(),
+            builder: GreenNodeBuilder::new(),
+        })
+    }
+
+    fn peek(&self) -> Option<Token> {
+        self.tokens.get(self.current).copied()
+    }
+
+    fn peek_non_trivia(&self) -> Option<Token> {
+        self.tokens[self.current..]
+            .iter()
+            .copied()
+            .find(|token| !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::LineComment))
+    }
+
+    fn bump(&mut self) {
+        let token = self.tokens[self.current];
+        let spelling = slice(self.source, token.range).expect("scanner ranges are valid");
+        self.builder.token(token.kind.into_raw(), spelling);
+        self.current += 1;
+    }
+
+    fn eat_trivia(&mut self) {
+        while let Some(token) = self.peek() {
+            if !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::LineComment) {
+                break;
+            }
+            self.bump();
+        }
+    }
+
+    fn error(&self, message: &str) -> ParseError {
+        match self.peek() {
+            Some(token) => ParseError {
+                message: if token.kind == SyntaxKind::Error {
+                    "invalid token".to_owned()
+                } else {
+                    message.to_owned()
+                },
+                range: token.range,
+            },
+            None => {
+                let end = checked_size(self.source.len()).expect("validated source length");
+                ParseError {
+                    message: message.to_owned(),
+                    range: checked_range(end, end).expect("ordered EOF range"),
+                }
+            }
+        }
+    }
+
+    fn expression(&mut self, nesting: usize) -> Result<usize, ParseError> {
+        self.term(nesting)
+    }
+
+    fn term(&mut self, nesting: usize) -> Result<usize, ParseError> {
+        self.eat_trivia();
+        let checkpoint = self.builder.checkpoint();
+        let mut height = self.factor(nesting)?;
+
+        while let Some(operator) = self.peek_non_trivia() {
+            if !matches!(operator.kind, SyntaxKind::Plus | SyntaxKind::Minus) {
+                break;
+            }
+            self.eat_trivia();
+            self.bump();
+            let right_height = self.factor(nesting)?;
+            let next_height = 1 + height.max(right_height);
+            if nesting + next_height > MAX_NESTING {
+                return Err(ParseError {
+                    message: "expression nesting limit exceeded".to_owned(),
+                    range: operator.range,
+                });
+            }
+            self.builder
+                .start_node_at(checkpoint, SyntaxKind::BinaryExpr.into_raw());
+            self.builder.finish_node();
+            height = next_height;
+        }
+
+        Ok(height)
+    }
+
+    fn factor(&mut self, nesting: usize) -> Result<usize, ParseError> {
+        self.eat_trivia();
+        let checkpoint = self.builder.checkpoint();
+        let mut height = self.unary(nesting)?;
+
+        while let Some(operator) = self.peek_non_trivia() {
+            if !matches!(operator.kind, SyntaxKind::Star | SyntaxKind::Slash) {
+                break;
+            }
+            self.eat_trivia();
+            self.bump();
+            let right_height = self.unary(nesting)?;
+            let next_height = 1 + height.max(right_height);
+            if nesting + next_height > MAX_NESTING {
+                return Err(ParseError {
+                    message: "expression nesting limit exceeded".to_owned(),
+                    range: operator.range,
+                });
+            }
+            self.builder
+                .start_node_at(checkpoint, SyntaxKind::BinaryExpr.into_raw());
+            self.builder.finish_node();
+            height = next_height;
+        }
+
+        Ok(height)
+    }
+
+    fn missing_expression(&mut self) {
+        self.builder.start_node(SyntaxKind::MissingExpr.into_raw());
+        self.builder.finish_node();
+    }
+
+    fn unary(&mut self, nesting: usize) -> Result<usize, ParseError> {
+        let mut reported = false;
+        loop {
+            self.eat_trivia();
+            match self.peek() {
+                Some(token) if token.kind == SyntaxKind::Minus => {
+                    if nesting >= MAX_NESTING {
+                        return Err(self.error("expression nesting limit exceeded"));
+                    }
+                    self.builder.start_node(SyntaxKind::UnaryExpr.into_raw());
+                    self.bump();
+                    let result = self.unary(nesting + 1);
+                    self.builder.finish_node();
+                    return result.map(|height| height + 1);
+                }
+                Some(token) if matches!(token.kind, SyntaxKind::Number | SyntaxKind::LeftParen) => {
+                    return self.primary(nesting);
+                }
+                None
+                | Some(Token {
+                    kind:
+                        SyntaxKind::Plus | SyntaxKind::Star | SyntaxKind::Slash | SyntaxKind::RightParen,
+                    ..
+                }) => {
+                    if !reported {
+                        let error = self.error("expected an expression");
+                        self.errors.push(error);
+                    }
+                    self.missing_expression();
+                    return Ok(0);
+                }
+                Some(_) => {
+                    let error = self.error("expected an expression");
+                    self.errors.push(error);
+                    self.bump();
+                    reported = true;
+                }
+            }
+        }
+    }
+
+    fn primary(&mut self, nesting: usize) -> Result<usize, ParseError> {
+        match self.peek() {
+            Some(token) if token.kind == SyntaxKind::Number => {
+                self.builder.start_node(SyntaxKind::NumberExpr.into_raw());
+                self.bump();
+                self.builder.finish_node();
+                Ok(0)
+            }
+            Some(token) if token.kind == SyntaxKind::LeftParen => self.group(nesting),
+            _ => unreachable!("unary checks primary starters"),
+        }
+    }
+
+    fn close_group(&mut self) {
+        loop {
+            self.eat_trivia();
+            match self.peek() {
+                Some(token) if token.kind == SyntaxKind::RightParen => {
+                    self.bump();
+                    break;
+                }
+                Some(_) => {
+                    let error = self.error("expected ')'");
+                    self.errors.push(error);
+                    self.bump();
+                }
+                None => {
+                    let error = self.error("expected ')'");
+                    self.errors.push(error);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn group(&mut self, nesting: usize) -> Result<usize, ParseError> {
+        if nesting >= MAX_NESTING {
+            return Err(self.error("expression nesting limit exceeded"));
+        }
+        self.builder.start_node(SyntaxKind::GroupingExpr.into_raw());
+        self.bump();
+        let result = match self.expression(nesting + 1) {
+            Err(error) => Err(error),
+            Ok(inner_height) => {
+                self.close_group();
+                Ok(inner_height + 1)
+            }
+        };
+        self.builder.finish_node();
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_NESTING, parse};
+    use crate::SyntaxKind;
+    use crate::ast::Expr;
+
+    #[test]
+    fn groups_numbers_and_owns_trivia_at_the_container() {
+        let source = " ( 001.50 ) ";
+        let parsed = parse(source).expect("small source");
+        assert!(parsed.errors.is_empty());
+        assert_eq!(parsed.root.to_string(), source);
+        let group = parsed.root.first_child().expect("group");
+        assert_eq!(group.kind(), SyntaxKind::GroupingExpr);
+        assert_eq!(usize::from(group.text_range().start()), 1);
+        assert_eq!(usize::from(group.text_range().end()), 11);
+        assert_eq!(group.to_string(), "( 001.50 )");
+        let number = group.first_child().expect("number");
+        assert_eq!(number.kind(), SyntaxKind::NumberExpr);
+        assert_eq!(number.parent(), Some(group.clone()));
+        assert_eq!(number.to_string(), "001.50");
+        assert_eq!(usize::from(number.text_range().start()), 3);
+        assert_eq!(usize::from(number.text_range().end()), 9);
+        let kinds: Vec<_> = group
+            .children_with_tokens()
+            .map(|child| child.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SyntaxKind::LeftParen,
+                SyntaxKind::Whitespace,
+                SyntaxKind::NumberExpr,
+                SyntaxKind::Whitespace,
+                SyntaxKind::RightParen
+            ]
+        );
+        assert_eq!(parsed.root.children_with_tokens().count(), 3);
+    }
+
+    #[test]
+    fn preserves_source_during_local_recovery() {
+        for source in [
+            "",
+            " // é\n",
+            "001.50",
+            "((12.5))",
+            " // é\n(12.5 // end",
+            "()",
+            "(1 @)",
+            "é",
+            "1 2",
+            "1 + 2",
+            "((1) extra)",
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.root.kind(), SyntaxKind::Root);
+            assert_eq!(parsed.root.to_string(), source);
+            assert_eq!(usize::from(parsed.root.text_range().start()), 0);
+            assert_eq!(usize::from(parsed.root.text_range().end()), source.len());
+        }
+        for source in ["001.50", "((12.5))", " // é\n(12.5) // end"] {
+            assert!(parse(source).expect("small source").errors.is_empty());
+        }
+    }
+
+    #[test]
+    fn reports_located_errors_and_recovers_group_closers() {
+        for (source, message, start, end) in [
+            ("", "expected an expression", 0, 0),
+            (" // é\n", "expected an expression", 7, 7),
+            ("(12.5", "expected ')'", 5, 5),
+            ("()", "expected an expression", 1, 2),
+            ("(1 @)", "invalid token", 3, 4),
+            ("é", "invalid token", 0, 2),
+            ("1 2", "expected end of input", 2, 3),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.errors.len(), 1, "{source:?}");
+            let error = &parsed.errors[0];
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
+            assert_eq!(parsed.root.to_string(), source);
+        }
+        let missing = parse("(12.5").expect("small source");
+        assert_eq!(
+            missing
+                .root
+                .first_child()
+                .expect("partial group")
+                .to_string(),
+            "(12.5"
+        );
+        let invalid = parse("(1 @)").expect("small source");
+        let group = invalid.root.first_child().expect("group");
+        assert_eq!(group.to_string(), "(1 @)");
+        assert_eq!(invalid.root.children_with_tokens().count(), 1);
+        let ending: Vec<_> = group
+            .children_with_tokens()
+            .skip(3)
+            .map(|element| (element.kind(), element.to_string()))
+            .collect();
+        assert_eq!(
+            ending,
+            vec![
+                (SyntaxKind::Error, "@".to_owned()),
+                (SyntaxKind::RightParen, ")".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn bounds_group_nesting_without_discarding_source() {
+        let source = format!("{}1{}", "(".repeat(MAX_NESTING), ")".repeat(MAX_NESTING));
+        let parsed = parse(&source).expect("small source");
+        assert!(parsed.errors.is_empty());
+        assert_eq!(parsed.root.to_string(), source);
+        let too_deep = format!("({source})");
+        let parsed = parse(&too_deep).expect("small source");
+        assert_eq!(parsed.errors.len(), 1);
+        assert_eq!(
+            parsed.errors[0].message,
+            "expression nesting limit exceeded"
+        );
+        assert_eq!(usize::from(parsed.errors[0].range.start()), MAX_NESTING);
+        assert_eq!(usize::from(parsed.errors[0].range.end()), MAX_NESTING + 1);
+        assert_eq!(parsed.root.to_string(), too_deep);
+    }
+
+    #[test]
+    fn unary_keeps_the_operator_and_intervening_trivia() {
+        let source = "- // é\n12.5";
+        let parsed = parse(source).expect("small source");
+        assert!(parsed.errors.is_empty());
+        assert_eq!(parsed.root.to_string(), source);
+        let unary = parsed.root.first_child().expect("unary node");
+        assert_eq!(unary.kind(), SyntaxKind::UnaryExpr);
+        let children: Vec<_> = unary
+            .children_with_tokens()
+            .map(|child| {
+                (
+                    child.kind(),
+                    usize::from(child.text_range().start()),
+                    usize::from(child.text_range().end()),
+                    child.to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            children,
+            vec![
+                (SyntaxKind::Minus, 0, 1, "-".to_owned()),
+                (SyntaxKind::Whitespace, 1, 2, " ".to_owned()),
+                (SyntaxKind::LineComment, 2, 7, "// é".to_owned()),
+                (SyntaxKind::Whitespace, 7, 8, "\n".to_owned()),
+                (SyntaxKind::NumberExpr, 8, 12, "12.5".to_owned()),
+            ]
+        );
+        let number = unary.first_child().expect("number node");
+        assert_eq!(number.parent(), Some(unary));
+        let spaced = parse(" -1 ").expect("small source");
+        assert_eq!(spaced.root.children_with_tokens().count(), 3);
+        assert_eq!(spaced.root.first_child().expect("unary").to_string(), "-1");
+    }
+
+    #[test]
+    fn nests_unary_chains_and_groups() {
+        for (source, kinds) in [
+            (
+                "--1",
+                vec![
+                    SyntaxKind::UnaryExpr,
+                    SyntaxKind::UnaryExpr,
+                    SyntaxKind::NumberExpr,
+                ],
+            ),
+            (
+                "-(001.50)",
+                vec![
+                    SyntaxKind::UnaryExpr,
+                    SyntaxKind::GroupingExpr,
+                    SyntaxKind::NumberExpr,
+                ],
+            ),
+            (
+                "(-1)",
+                vec![
+                    SyntaxKind::GroupingExpr,
+                    SyntaxKind::UnaryExpr,
+                    SyntaxKind::NumberExpr,
+                ],
+            ),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert!(parsed.errors.is_empty(), "{source:?}");
+            assert_eq!(parsed.root.to_string(), source);
+            let mut node = parsed.root;
+            for kind in kinds {
+                node = node.first_child().expect("operand node");
+                assert_eq!(node.kind(), kind, "{source:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn missing_unary_operands_keep_partial_nodes_and_suffixes() {
+        for (source, message, start, end) in [
+            ("-", "expected an expression", 1, 1),
+            ("--", "expected an expression", 2, 2),
+            ("(-)", "expected an expression", 2, 3),
+            ("-é", "invalid token", 1, 3),
+            ("- // é\n", "expected an expression", 8, 8),
+            ("(-1", "expected ')'", 3, 3),
+            ("-1)", "expected end of input", 2, 3),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.root.to_string(), source);
+            assert_eq!(parsed.errors.len(), 1, "{source:?}");
+            let error = &parsed.errors[0];
+            assert_eq!(error.message, message, "{source:?}");
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
+        }
+        let missing = parse("-").expect("small source");
+        let unary = missing.root.first_child().expect("partial unary");
+        assert_eq!(unary.kind(), SyntaxKind::UnaryExpr);
+        let operand = unary.first_child().expect("missing operand slot");
+        assert_eq!(operand.kind(), SyntaxKind::MissingExpr);
+        assert_eq!(usize::from(operand.text_range().start()), 1);
+        assert_eq!(usize::from(operand.text_range().end()), 1);
+        assert_eq!(unary.to_string(), "-");
+        let invalid = parse("-é").expect("small source");
+        let unary = invalid.root.first_child().expect("unary");
+        let skipped = unary.children_with_tokens().nth(1).expect("error token");
+        assert_eq!(skipped.kind(), SyntaxKind::Error);
+        assert_eq!(skipped.to_string(), "é");
+    }
+
+    #[test]
+    fn shares_the_depth_budget_between_unary_and_groups() {
+        for source in [
+            format!("{}1", "-".repeat(MAX_NESTING)),
+            format!("{}(1)", "-".repeat(MAX_NESTING - 1)),
+            format!(
+                "{}{}1{}",
+                "(".repeat(MAX_NESTING / 2),
+                "-".repeat(MAX_NESTING / 2),
+                ")".repeat(MAX_NESTING / 2)
+            ),
+        ] {
+            let parsed = parse(&source).expect("small source");
+            assert!(parsed.errors.is_empty());
+            assert_eq!(parsed.root.to_string(), source);
+            let too_deep = format!("-{source}");
+            let parsed = parse(&too_deep).expect("small source");
+            assert_eq!(parsed.errors.len(), 1);
+            assert_eq!(
+                parsed.errors[0].message,
+                "expression nesting limit exceeded"
+            );
+            assert_eq!(usize::from(parsed.errors[0].range.start()), MAX_NESTING);
+            assert_eq!(usize::from(parsed.errors[0].range.end()), MAX_NESTING + 1);
+            assert_eq!(parsed.root.to_string(), too_deep);
+        }
+    }
+
+    #[test]
+    fn builds_precedence_and_left_association() {
+        for (source, expected) in [
+            ("8 / 4 / 2", "(/ (/ 8 4) 2)"),
+            ("8 / (4 / 2)", "(/ 8 (group (/ 4 2)))"),
+            ("1 + 2 * 3", "(+ 1 (* 2 3))"),
+            ("(1 + 2) * 3", "(* (group (+ 1 2)) 3)"),
+            ("8 - 3 - 1", "(- (- 8 3) 1)"),
+            ("1--2", "(- 1 (- 2))"),
+            ("-(1 + 2) * 3", "(* (- (group (+ 1 2))) 3)"),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert!(parsed.errors.is_empty(), "{source:?}");
+            assert_eq!(parsed.root.to_string(), source);
+            let view =
+                Expr::cast(parsed.root.first_child().expect("expression")).expect("typed view");
+            assert_eq!(view.to_prefix().as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn wraps_only_expression_text_and_keeps_trivia_between_operands() {
+        let source = " 001.0 // first\n + 02.00 * 3 ";
+        let parsed = parse(source).expect("small source");
+        assert!(parsed.errors.is_empty());
+        assert_eq!(parsed.root.to_string(), source);
+        let elements: Vec<_> = parsed.root.children_with_tokens().collect();
+        assert_eq!(elements.len(), 3);
+        assert_eq!(elements[0].kind(), SyntaxKind::Whitespace);
+        assert_eq!(elements[2].kind(), SyntaxKind::Whitespace);
+        let sum = parsed.root.first_child().expect("sum");
+        assert_eq!(sum.to_string(), source.trim());
+        let mut operands = sum.children();
+        assert_eq!(operands.next().expect("left number").to_string(), "001.0");
+        let product = operands.next().expect("right product");
+        assert_eq!(product.kind(), SyntaxKind::BinaryExpr);
+        assert_eq!(product.to_string(), "02.00 * 3");
+        assert_eq!(product.parent(), Some(sum));
+    }
+
+    #[test]
+    fn recovers_missing_binary_operands() {
+        for (source, message, start, end) in [
+            ("1 +", "expected an expression", 3, 3),
+            ("8 **2", "expected an expression", 3, 4),
+            ("1 + é", "invalid token", 4, 6),
+            ("1 + (2 * )", "expected an expression", 9, 10),
+            ("(1 + 2", "expected ')'", 6, 6),
+            ("1 + 2 3", "expected end of input", 6, 7),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.root.to_string(), source);
+            assert_eq!(parsed.errors.len(), 1);
+            let error = &parsed.errors[0];
+            assert_eq!(error.message, message);
+            assert_eq!(usize::from(error.range.start()), start);
+            assert_eq!(usize::from(error.range.end()), end);
+        }
+        let failed = parse("1 +").expect("small source");
+        let binary = failed.root.first_child().expect("partial binary");
+        assert_eq!(binary.kind(), SyntaxKind::BinaryExpr);
+        let kinds: Vec<_> = binary.children().map(|node| node.kind()).collect();
+        assert_eq!(kinds, vec![SyntaxKind::NumberExpr, SyntaxKind::MissingExpr]);
+    }
+
+    #[test]
+    fn bounds_both_binary_folds_without_discarding_source() {
+        for separator in [" * 1", " + 1"] {
+            let source = format!("1{}", separator.repeat(MAX_NESTING));
+            let parsed = parse(&source).expect("small source");
+            assert!(parsed.errors.is_empty());
+            let too_deep = format!("{source}{separator}");
+            let parsed = parse(&too_deep).expect("small source");
+            assert_eq!(parsed.errors.len(), 1);
+            assert_eq!(
+                parsed.errors[0].message,
+                "expression nesting limit exceeded"
+            );
+            assert_eq!(
+                usize::from(parsed.errors[0].range.start()),
+                2 + 4 * MAX_NESTING
+            );
+            assert_eq!(
+                usize::from(parsed.errors[0].range.end()),
+                3 + 4 * MAX_NESTING
+            );
+            assert_eq!(parsed.root.to_string(), too_deep);
+        }
+    }
+
+    #[test]
+    fn includes_both_operands_and_ancestor_wrappers_in_the_budget() {
+        let factors = " * 1".repeat(MAX_NESTING - 1);
+        let sums = " + 1".repeat(MAX_NESTING - 1);
+        for source in [
+            format!("1{factors} + 1"),
+            format!("1 + 1{factors}"),
+            format!("(1{sums})"),
+            format!("-(1{})", " + 1".repeat(MAX_NESTING - 2)),
+        ] {
+            assert!(parse(&source).expect("small source").errors.is_empty());
+        }
+        let factors = " * 1".repeat(MAX_NESTING);
+        let sums = " + 1".repeat(MAX_NESTING);
+        for (source, operator) in [
+            (format!("1{factors} + 1"), 2 + 4 * MAX_NESTING),
+            (format!("1 + 1{factors}"), 2),
+            (format!("(1{sums})"), 3 + 4 * (MAX_NESTING - 1)),
+            (
+                format!("-(1{})", " + 1".repeat(MAX_NESTING - 1)),
+                4 + 4 * (MAX_NESTING - 2),
+            ),
+        ] {
+            let parsed = parse(&source).expect("small source");
+            assert_eq!(parsed.errors.len(), 1);
+            assert_eq!(
+                parsed.errors[0].message,
+                "expression nesting limit exceeded"
+            );
+            assert_eq!(usize::from(parsed.errors[0].range.start()), operator);
+            assert_eq!(usize::from(parsed.errors[0].range.end()), operator + 1);
+            assert_eq!(parsed.root.to_string(), source);
+        }
+    }
+
+    #[test]
+    fn keeps_missing_operands_in_distinct_left_and_right_slots() {
+        for (source, left, right, missing_at) in [
+            ("1 +", SyntaxKind::NumberExpr, SyntaxKind::MissingExpr, 3),
+            ("* 2", SyntaxKind::MissingExpr, SyntaxKind::NumberExpr, 0),
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.errors.len(), 1);
+            assert_eq!(parsed.root.to_string(), source);
+            let binary = parsed.root.first_child().expect("binary");
+            assert_eq!(binary.kind(), SyntaxKind::BinaryExpr);
+            let operands: Vec<_> = binary.children().collect();
+            assert_eq!(operands.len(), 2);
+            assert_eq!(operands[0].kind(), left);
+            assert_eq!(operands[1].kind(), right);
+            let missing = operands
+                .iter()
+                .find(|node| node.kind() == SyntaxKind::MissingExpr)
+                .expect("missing slot");
+            assert_eq!(usize::from(missing.text_range().start()), missing_at);
+            assert_eq!(usize::from(missing.text_range().end()), missing_at);
+            assert_eq!(missing.to_string(), "");
+            assert_eq!(missing.children_with_tokens().count(), 0);
+        }
+    }
+
+    #[test]
+    fn recovers_group_closers_and_collects_multiple_errors() {
+        let source = "(1 @) + é";
+        let parsed = parse(source).expect("small source");
+        assert_eq!(parsed.root.to_string(), source);
+        let errors: Vec<_> = parsed
+            .errors
+            .iter()
+            .map(|error| {
+                (
+                    error.message.as_str(),
+                    usize::from(error.range.start()),
+                    usize::from(error.range.end()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            errors,
+            vec![("invalid token", 3, 4), ("invalid token", 8, 10)]
+        );
+        let binary = parsed.root.first_child().expect("binary");
+        assert_eq!(binary.kind(), SyntaxKind::BinaryExpr);
+        let mut operands = binary.children();
+        assert_eq!(operands.next().expect("left group").to_string(), "(1 @)");
+        assert_eq!(
+            operands.next().expect("missing right").kind(),
+            SyntaxKind::MissingExpr
+        );
+        let closed = parse("(-)").expect("small source");
+        assert_eq!(closed.root.first_child().expect("group").to_string(), "(-)");
+        assert_eq!(closed.root.children_with_tokens().count(), 1);
+        let incomplete = parse("(1 + 2").expect("small source");
+        let group = incomplete.root.first_child().expect("group");
+        assert!(
+            !group
+                .children_with_tokens()
+                .any(|element| element.kind() == SyntaxKind::RightParen)
+        );
+        assert_eq!(incomplete.root.to_string(), "(1 + 2");
+    }
+
+    #[test]
+    fn retains_unowned_closers_and_other_root_suffix_tokens() {
+        let source = "1 ) é";
+        let parsed = parse(source).expect("small source");
+        assert_eq!(parsed.root.to_string(), source);
+        let errors: Vec<_> = parsed
+            .errors
+            .iter()
+            .map(|error| {
+                (
+                    error.message.as_str(),
+                    usize::from(error.range.start()),
+                    usize::from(error.range.end()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            errors,
+            vec![("expected end of input", 2, 3), ("invalid token", 4, 6)]
+        );
+    }
+
+    #[test]
+    fn terminates_on_malformed_shapes_and_stops_at_resource_limits() {
+        for source in [
+            "", ")", "((( ", "1 + * 2", "@-é", "1 ) @", "((1 + ))", "++++", "****",
+        ] {
+            let parsed = parse(source).expect("small source");
+            assert_eq!(parsed.root.to_string(), source);
+            assert_eq!(usize::from(parsed.root.text_range().end()), source.len());
+            assert!(!parsed.errors.is_empty());
+        }
+        for source in [
+            format!(
+                "{}1{}",
+                "(".repeat(MAX_NESTING + 1),
+                ")".repeat(MAX_NESTING + 1)
+            ),
+            "*".repeat(MAX_NESTING + 6),
+        ] {
+            let parsed = parse(&source).expect("small source");
+            assert_eq!(parsed.root.to_string(), source);
+            assert_eq!(
+                parsed.errors.last().expect("limit error").message,
+                "expression nesting limit exceeded"
+            );
+            assert!(
+                !parsed
+                    .errors
+                    .iter()
+                    .any(|error| error.message == "expected end of input")
+            );
+        }
+    }
+}
+```
+
+</details>
+
+<details>
+<summary>Complete resulting file · rlox/crates/syntax/examples/parse_expression.rs</summary>
+
+```rust title="rlox/crates/syntax/examples/parse_expression.rs · complete resulting file"
+use rlox_syntax::{ast::Expr, cst::parse};
+
+fn main() {
+    for source in [
+        " 123 // note\n",
+        "123 456",
+        "",
+        "é",
+        "(123)",
+        "((12.5))",
+        "( // é\n123 )",
+        "()",
+        "(123",
+        "(123 456)",
+        "123)",
+        "-123",
+        "--123",
+        "-(123)",
+        "(-123)",
+        "-",
+        "(-)",
+        "-é",
+        "8 / 4 / 2",
+        "8 * 4 / 2",
+        "8 / (4 / 2)",
+        "-8 * 4 / 2",
+        "8 *",
+        "8 **2",
+        "8 / é",
+        "1 + 2 * 3",
+        "(1 + 2) * 3",
+        "8 - 3 - 1",
+        "1--2",
+        "-(1 + 2) * 3",
+        "1 +",
+        "1 + +2",
+        "1 + é",
+        "(1 + 2",
+        " 001.0 // first\n + 02.00 * 3",
+    ] {
+        match parse(source) {
+            Ok(parsed) => {
+                if parsed.errors.is_empty() {
+                    let prefix = parsed
+                        .root
+                        .first_child()
+                        .and_then(Expr::cast)
+                        .and_then(|expr| expr.to_prefix());
+                    println!(
+                        "{source:?} => {}",
+                        prefix.as_deref().unwrap_or("<incomplete>")
+                    );
+                } else {
+                    for error in parsed.errors {
+                        println!(
+                            "{source:?} => {} [{}..{})",
+                            error.message,
+                            usize::from(error.range.start()),
+                            usize::from(error.range.end())
+                        );
+                    }
+                }
+            }
+            Err(error) => println!("{source:?} => {error}"),
+        }
+    }
+}
+```
+
+</details>

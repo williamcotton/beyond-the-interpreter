@@ -1,4 +1,4 @@
-use rlox_syntax::parser::{ParseFailure, parse};
+use rlox_syntax::{ast::Expr, cst::parse};
 
 fn main() {
     for source in [
@@ -39,14 +39,29 @@ fn main() {
         " 001.0 // first\n + 02.00 * 3",
     ] {
         match parse(source) {
-            Ok(expr) => println!("{source:?} => {}", expr.to_prefix()),
-            Err(ParseFailure::Syntax(error)) => println!(
-                "{source:?} => {} [{}..{})",
-                error.message,
-                usize::from(error.range.start()),
-                usize::from(error.range.end()),
-            ),
-            Err(ParseFailure::SourceTooLarge(error)) => println!("{source:?} => {error}"),
+            Ok(parsed) => {
+                if parsed.errors.is_empty() {
+                    let prefix = parsed
+                        .root
+                        .first_child()
+                        .and_then(Expr::cast)
+                        .and_then(|expr| expr.to_prefix());
+                    println!(
+                        "{source:?} => {}",
+                        prefix.as_deref().unwrap_or("<incomplete>")
+                    );
+                } else {
+                    for error in parsed.errors {
+                        println!(
+                            "{source:?} => {} [{}..{})",
+                            error.message,
+                            usize::from(error.range.start()),
+                            usize::from(error.range.end())
+                        );
+                    }
+                }
+            }
+            Err(error) => println!("{source:?} => {error}"),
         }
     }
 }
