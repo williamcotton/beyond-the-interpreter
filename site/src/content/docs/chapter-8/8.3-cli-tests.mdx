@@ -252,6 +252,21 @@ different failure: missing a required filename should be status `2`, with
 usage on stderr and nothing on stdout. The earlier unit tests still cover
 additional argument combinations.
 
+<aside className="learning-check" aria-label="Predict the failed assertion">
+
+### Predict the failed assertion
+
+We are about to move the error summary from stderr to stdout. Before reading the change, identify the first assertion that should fail and the extra text it will receive.
+
+<details>
+<summary>Show the explanation</summary>
+
+The stdout comparison receives the token rows followed by the error summary. That differs from the independently written expected rows. The assertion can catch the regression before the test reaches its stderr comparison.
+
+</details>
+
+</aside>
+
 ## Watch the tests catch a mistake
 
 From **`rlox/`**, run:

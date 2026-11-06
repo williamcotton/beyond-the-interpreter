@@ -77,6 +77,12 @@ there and remains covered by the existing `/target/` ignore rule.
 The old manifest no longer describes where our source files live; this is
 one grouped layout change.
 
+There are three names to track during this move. The directory `crates/app`
+locates the package on disk. The package name `rlox-app` lets Cargo select
+it. The binary name `rlox` is what someone invokes. The manifest below
+connects these names explicitly. Follow each path relative to the manifest
+that contains it as you make the move.
+
 ## Describe the two packages
 
 Create **`rlox/crates/app/Cargo.toml`** with this complete content:

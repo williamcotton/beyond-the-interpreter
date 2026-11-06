@@ -233,9 +233,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The named tests should report `ok`, and formatting and Clippy should finish
-successfully. `Cargo.lock`, manifests, the lexer adapter, and the CLI stay
-unchanged. Keywords, numbers, and strings remain for the following sections.
+The adjacent-comparison cases should pass as well as the single-token
+cases. Inspect the first differing range if a chain fails, then resume
+recognition at that range’s end to locate the boundary mistake.
 
 <details>
 <summary>Complete resulting syntax library</summary>

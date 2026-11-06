@@ -51,6 +51,12 @@ failed operator lookahead in 5.2.
 
 <IdentifierCursor client:load />
 
+Starting and continuing are different permissions. A digit can continue a
+name already started by a letter or underscore; that does not make it a valid
+start. The growing loop must stop before the first character that fails the
+continuation rule. That unread character belongs to the next token, just as
+failed operator lookahead did in the previous chapter.
+
 ## Choose the identifier arm
 
 Add `Identifier` to `SyntaxKind` before `Error`:
@@ -191,9 +197,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The named tests should report `ok`, and formatting and Clippy should finish
-successfully. No manifest or dependency changes are needed; `Cargo.lock`
-should remain unchanged. The CLI still provides its existing `source` command.
+The tests should pass. An identifier that stops too early points to its
+continuation predicate. One that swallows punctuation points to the same
+predicate accepting too much. Use the expected range to distinguish them.
 
 <details>
 <summary>Complete resulting syntax library</summary>

@@ -43,6 +43,12 @@ Usage: rlox <file>
 Our old rule sees two arguments where it expects one. We need to distinguish
 the operation name from that operation’s arguments.
 
+Read `source hello.lox` as an operation followed by that operation's payload.
+The outer selector owns the question “which operation?”; the existing helper
+owns “does its payload contain exactly one filename?” Passing the remaining
+slice to that helper is the handoff. We can add another operation later without
+teaching filename validation about every possible command name.
+
 ## Separate the command from its arguments
 
 We’ll keep `filename_from_args` for its existing job: checking that a sequence

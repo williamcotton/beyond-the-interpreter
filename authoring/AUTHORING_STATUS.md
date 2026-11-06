@@ -1000,3 +1000,75 @@ Committed/pushed as `1500db7` (`feat: pair section 9.5 with extension ci checks`
 **Handoff/limits:** [12.7](../site/src/content/docs/chapter-12/12.7-typed-views.mdx) and matching rlox ready for combined review. Owned engine retired from active source/build; historical source remains preserved. Prior publication/reference/navigation checks apply, with manuscript/components unchanged in this pass; no repeated site suite, screenshots or browser visual review. Local verification only, with no new hosted/minimum-compiler/other-platform/oversized-file claim. No new framework, commit/push or later planning. Await acceptance/instruction.
 
 **CH12-07 acceptance:** User said “ok great, commit and let’s move on to outlining chapter 13”, accepting the combined typed-view/retirement endpoint and completing Chapter 12. Commit authorized, followed by Chapter 13 planning only; no push.
+
+## Manuscript-wide pedagogical review — 2026-11-05
+
+**Authorization:** User requested additive teaching review of the entire existing
+MDX manuscript while preserving all chapters, sections and reader code. This broad
+text assignment supersedes the prior single-section brief. Ready for human review;
+acceptance has not been inferred from automated checks.
+
+**Changes:** Introduction and all 44 numbered sections strengthened with explicit
+mental models, responsibility boundaries and section-specific reasoning questions
+with revealable answers. Deeper walkthroughs for Clap, Logos, prefix printing,
+precedence and Rowan. Eight fixed interactive traces / 37 frames in seven pages;
+manual builder/readback in 12.2, two stacks/error cleanup in 12.3, delayed
+checkpoint wrapping in 12.5. See [review record](PEDAGOGICAL_REVIEW.md) for chapter
+findings, placement rationale and scope.
+
+**Checks:** Existing locked site install; site check reports zero diagnostics;
+46-page build succeeds. All new frames exercised for forward/back/reset, boundary
+controls, live state and complete server-rendered fallback. All original MDX code
+fences remain unchanged/in order; all original H2 headings and frontmatter retained.
+Native source/checkpoints/manifests/lockfiles/workflows/existing components unchanged.
+No Rust tests or implementation-route replay needed or claimed for additive prose.
+Existing optional i18n/404/sitemap build notices remain.
+
+**Limits/next action:** Human text/interaction review, including appearance and
+pacing; no screenshots/visual inspection, real-browser hydration claim or learning
+acceptance. No future chapter, commit, push or publication.
+
+**Final publication checks:** All 3,066 built local links/anchors resolve; all 44
+numbered pages contain their rendered learning check. Installed Rowan 0.17.0
+builder and positioned-node source confirm the manual example and trace APIs.
+Built preview served locally on port 4323; 12.2 responds HTTP 200. The development
+server on 4322 returned 404 despite the successful static build; the built preview
+is the review route. No browser appearance or hydration claim.
+
+**Review correction — learning-check separation:** User found the question/answer
+and following complete-file disclosure visually ambiguous in 2.4. Grouped each
+of the 44 questions and its answer in a labeled aside with a border, background,
+padding and exterior spacing. Complete-file disclosures remain outside the panel.
+Site check: zero diagnostics; static build succeeds; rendered HTML confirms one
+panel per numbered page and the 2.4 reference outside it. No screenshot/visual
+inspection; refresh the port 4323 built preview for human appearance review.
+
+**Review correction — introduce Rowan before coordinates:** User identified that
+12.1 named Rowan's responsibilities before introducing the library. Rewrote the
+opening around source spelling lost by the owned AST, editor needs, a definition
+of losslessness, and Rowan's role as a Rust syntax-tree library. Introduced the
+builder in plain language before distinguishing strategy/construction/storage,
+then motivated coordinate alignment. Removed the delayed duplicate introduction.
+Original listings, section headings, reader code and dependency pins unchanged.
+
+## Second manuscript examination — 2026-11-06
+
+User authorized another in-depth manuscript review, specifically targeting repeated
+section flow. Removed uniform closing exercises, placed nine focused predictions
+at the point of need, consolidated repeated explanations and routine status prose,
+and added concrete explanations for ownership, boundaries, host execution, height
+propagation and macro expansion. Five new demonstrations cover numeric boundaries,
+multiline scopes, precedence, recovery and typed slots. Retired the static Logos
+stepper and corrected the Chapter 12 primary() trace. See the second-examination
+entry in PEDAGOGICAL_REVIEW.md for rationale.
+
+Ready for text/interaction review. Site check has zero diagnostics, build produces
+46 pages and all 3,030 local links/anchors resolve. All original listings, H2s and
+frontmatter preserved against the start of this pass. Interaction harnesses pass
+for 43 trace frames and 13 case selections. MDX is about 3,229 words shorter.
+Appearance and actual browser hydration remain unverified, following repository
+review guidance. No native implementation replay, commit or publication performed.
+
+**PR handoff authorization — 2026-11-06:** User requested a branch, commit and
+GitHub PR for the manuscript revisions. Prepare the reviewed text and publication
+components on a dedicated branch and submit the change for review.

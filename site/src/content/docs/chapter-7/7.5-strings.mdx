@@ -252,9 +252,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The string, boundary and unterminated-input tests should report `ok`, along
-with the earlier scanner tests. Formatting and Clippy should finish
-successfully. Dependencies and `Cargo.lock` should stay unchanged.
+The tests should pass for complete, multiline and unfinished strings. In
+the unfinished case, check both the Error kind and its extent through EOF.
+That extent is what lets a later tool identify the whole attempted string.
 
 We now have rules for Lox's lexical categories, including strings. Our scanner
 also keeps whitespace, comments and malformed fragments, giving later tools

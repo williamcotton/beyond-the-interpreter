@@ -68,6 +68,13 @@ ranges. The number's spelling still comes from bytes `[1, 4)` of the
 original source. `None` means there is no next token; our scanner doesn't
 need a new end-of-file token kind.
 
+Consider `123 456`. Recognition of the first number advances through `123`,
+then the public entry finds another token where the input should end. The
+reported range belongs to `456`, because that is the evidence for the failed
+expectation. For an empty input, there is no token to point at, so an empty
+range at the source's end identifies where the expression was expected.
+These two cases determine the error record we need.
+
 ## Return an expression or a located error
 
 A parser can fail on ordinary input, so its result will be
@@ -351,7 +358,7 @@ Run the new parser tests first:
 cargo test -p rlox-syntax parser::tests
 ```
 
-All five named tests should pass. Then run the workspace checks:
+The tests should pass. Then run the workspace checks:
 
 ```sh
 cargo fmt --all -- --check
@@ -359,11 +366,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The scanner, expression-printer, source-coordinate and CLI tests should
-continue to pass alongside them. Our first parser can now turn one numeric
-expression into a tree and reject the rest of the input when it doesn't
-belong. Next we'll make a grammar rule call back into the parser to handle
-parentheses.
+After the checks pass, compare the observations for `123` and `123 456`.
+The first produces one number tree. The second reaches the same initial
+number, then reports the unconsumed token. Our entry point now enforces a
+complete expression boundary.
 
 <details>
 <summary>Complete resulting parser module</summary>

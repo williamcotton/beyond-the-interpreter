@@ -10,6 +10,8 @@ next:
   label: 11.5 · Put addition around multiplication
 ---
 
+import MechanismTrace from '../../../components/MechanismTrace';
+
 <p className="book-subtitle">Chapter 11 · Parsing Expressions by Hand</p>
 
 The parser can read an operand such as `8`, `-8` or `(8)`. For `8 / 4 / 2`,
@@ -56,6 +58,15 @@ read / and 2 → (/ (/ 8 4) 2)
 Each right operand is read through `unary`, not another whole `factor`.
 Reading a complete factor on the right would allow it to absorb `4 / 2`
 and produce the different, right-associated tree `(/ 8 (/ 4 2))`.
+
+<MechanismTrace variant="fold" client:load />
+
+Compare two measurements of `8 / 4 / 2`. The factor loop makes two
+iterations. Its result has two binary nodes on the path to `8`. A much
+longer chain can keep the same few parsing calls active while adding one
+more tree level per iteration. The printer will later visit those levels
+recursively. Our limit must account for the shape we produce as well as
+the calls used to produce it.
 
 ## Count the tree a loop can build
 
@@ -351,10 +362,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-All nineteen parser tests and the existing workspace tests should pass.
-We can now parse a full multiplicative chain, preserving its left-associated
-shape and explicit grouping. Next we'll add addition and subtraction around
-this precedence level.
+The checks should pass. The prefix trees for `8 / 4 / 2` and `8 / (4 / 2)`
+make association visible before evaluation. The height cases then check
+that the same construction remains within our resource budget.
 
 <details>
 <summary>Complete resulting parser module</summary>

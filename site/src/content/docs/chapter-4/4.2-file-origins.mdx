@@ -121,6 +121,12 @@ cargo test --lib
 
 The new test and the existing range tests should report `ok`.
 
+A source location is like a page reference: a line number alone cannot tell
+you which book to open. `FileId` chooses the source in a collection; `TextRange`
+chooses bytes within that source. The ID is meaningful only in the collection
+that assigned it. Copying an origin copies this reference information, not the
+file or the source text.
+
 ## Use the identity to choose the source
 
 The origin records an association; the owner of the sources must still

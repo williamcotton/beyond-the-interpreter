@@ -115,6 +115,12 @@ Clap uses the variant to recognize `tokens` and its field to require one
 filename, following the same derive pattern as `source`. The doc comments
 supply the command and argument descriptions in help.
 
+There are two matches because we need the command at two moments. First we
+borrow its filename to read the source. Then we inspect the still-available
+command to select source display or token display. Moving the filename out
+in the first match would partially consume the enum before that second use.
+The borrow expresses temporary access rather than a new copy of the command.
+
 ## Keep the command while borrowing its filename
 
 We now need two decisions: which file to read and what to do with its text.

@@ -164,6 +164,13 @@ The first assertion checks a failed lookahead at EOF. The second checks a
 failed comparison when input remains. In both cases the slash covers only
 its own byte.
 
+Follow a Windows-style line ending through both rules. For `//x\r\n`,
+where the escapes stand for actual carriage-return and line-feed bytes,
+the comment consumes `/`, `/`, `x` and the carriage return. Its stopping
+condition is line feed. The outer loop then gives that line feed to the
+whitespace rule. The comment range ends at byte 4 and whitespace occupies
+`[4, 5)`. Keeping that exact division in mind makes the next test readable.
+
 ## Check the comment boundary
 
 Append this test **inside the same module** for our annotated source:
@@ -251,9 +258,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The named tests should report `ok`, and formatting and Clippy should finish
-successfully. There are no dependency or CLI changes; `Cargo.lock` should
-remain unchanged.
+The checks should pass for a bare slash, an empty comment, a comment at
+EOF and a comment followed by a line ending. Together they exercise both
+ways the slash rule begins and both ways the comment body ends.
 
 <details>
 <summary>Complete resulting syntax library</summary>

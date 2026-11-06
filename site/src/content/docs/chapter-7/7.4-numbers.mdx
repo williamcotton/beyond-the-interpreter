@@ -10,6 +10,8 @@ next:
   label: 7.5 · Keep strings together
 ---
 
+import BoundaryCases from '../../../components/BoundaryCases';
+
 <p className="book-subtitle">Chapter 7 · From Handwritten Scanning to Logos</p>
 
 The scanner can recognize `print`, but the digits in `print 123.45;` still
@@ -48,6 +50,14 @@ Here are the boundaries we want, with byte positions local to each source:
 
 Recognizing these tokens doesn't make every example a valid expression.
 Deciding how tokens fit together belongs to the parser.
+
+Read the fractional suffix as one optional unit. The dot belongs to a
+number when it can bring at least one following digit with it. In `12.`,
+the integer prefix is complete and the dot begins the next token. In
+`12.5`, the whole suffix `.5` extends the number. We can express this by
+grouping the dot and following digits together before making them optional.
+
+<BoundaryCases variant="numbers" client:load />
 
 ## Describe the spelling in one rule
 
@@ -215,10 +225,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The new number tests and the renamed boundary test should report `ok`, with
-the existing tests still passing. Formatting and Clippy should complete
-successfully. There are no manifest, dependency, adapter or CLI changes;
-`Cargo.lock` should remain unchanged. Strings still await their own rule.
+The checks should pass. The dot cases distinguish the optional fractional
+suffix from punctuation, and the sign cases leave negation and subtraction
+available to the parser.
 
 <details>
 <summary>Complete resulting syntax library</summary>

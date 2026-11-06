@@ -10,24 +10,22 @@ next:
   label: 12.3 · Parse numbers and groups without dropping source
 ---
 
+import MechanismTrace from '../../../components/MechanismTrace';
+
 import LosslessTree from '../../../components/LosslessTree';
 
 <p className="book-subtitle">Chapter 12 · Building Lossless Trees with Rowan</p>
 
-Try recovering `001.50` from our owned `Expr::Number(1.5)`. The value tells
-us the number, but it can't tell us whether the reader wrote `1.5`,
-`001.50` or surrounded it with comments. Once the parser drops those
-bytes, the printer can't recover them.
+We now have coordinate types that our scanner and Rowan can share. Let's
+use the scanner's tokens to build our first tree. For a number spelled
+`001.50`, we will create a `NumberExpr` node containing a `Number` token
+whose text is exactly `001.50`. The node gives the token a structural role,
+and the token keeps the spelling available for inspection.
 
-The [abstract syntax trees in Crafting Interpreters](https://craftinginterpreters.com/representing-code.html#implementing-syntax-trees)
-keep the structure that evaluation needs. Here we need a view of the actual
-source as well.
-
-An editor needs another view. A **concrete syntax tree** keeps tokens and
-source spelling, including whitespace and comments—often called *trivia*.
-We'll keep that trivia rather than discard it. A tree is **lossless** when
-its tokens, in order, reconstruct the entire source, even when some tokens
-aren't valid Lox.
+Begin with one simple construction rule. Wrap each number token in a
+number node and put every other token directly in the root. This gives us
+a small tree we can build and read back before asking grammar functions
+to choose more elaborate relationships.
 
 Explore these two small sources. Select a tree entry to connect its parent,
 text and byte range. `NumberExpr` is a node containing a `Number` token;
@@ -70,6 +68,16 @@ values to `u16` is straightforward. Turning an arbitrary integer back into
 an enum requires checking that it names a declared variant. A second
 handwritten match list could drift from the enum when a kind is added.
 Instead, a small local macro will generate both from the same list.
+
+Try expanding the kind-declaration idea for just `Number` on paper. That
+one name must appear in the enum, in the conversion that recognizes its
+numeric tag, and in the test's list of declared kinds. Adding `NumberExpr`
+requires the same three appearances. The macro repeats those mechanical
+uses of each supplied name. The scanner's token attributes travel with the
+name into the enum, while the conversion code uses the name alone.
+
+Read the expansion below once for a single `$kind`, then imagine repeating
+that expansion for every declared kind.
 
 In **`rlox/crates/syntax/src/lib.rs`**, insert this macro after the imports
 and before the existing `SyntaxKind` declaration:
@@ -211,6 +219,48 @@ kind; expression-specific views come later. The Rust Book explains
 [associated types](https://doc.rust-lang.org/book/ch20-02-advanced-traits.html#specifying-placeholder-types-in-trait-definitions-with-associated-types)
 and [type aliases](https://doc.rust-lang.org/book/ch20-03-advanced-types.html#creating-type-synonyms-with-type-aliases).
 
+<MechanismTrace variant="builder" client:load />
+
+### Try the builder without a scanner
+
+The trace above is a small hand-built version of the function we are about
+to write. Here are its operations together. This is a reading experiment,
+not another required project file; the `SyntaxKind` and `SyntaxNode` names
+are the ones we just defined.
+
+```rust title="Reading experiment · build and inspect one number"
+let mut builder = rowan::GreenNodeBuilder::new();
+builder.start_node(SyntaxKind::Root.into_raw());
+builder.start_node(SyntaxKind::NumberExpr.into_raw());
+builder.token(SyntaxKind::Number.into_raw(), "12.5");
+builder.finish_node(); // NumberExpr
+builder.finish_node(); // Root
+
+let green = builder.finish();
+let root = SyntaxNode::new_root(green);
+let number = root.first_child().expect("number node");
+let token = number.first_token().expect("number token");
+
+assert_eq!(number.kind(), SyntaxKind::NumberExpr);
+assert_eq!(token.text(), "12.5");
+assert_eq!(usize::from(number.text_range().start()), 0);
+assert_eq!(usize::from(number.text_range().end()), 4);
+assert_eq!(root.to_string(), "12.5");
+```
+
+Read this in two passes. The first six calls describe a tree by opening
+containers and adding a leaf. The remaining calls navigate the result. No
+recursive-descent rule has run, and Rowan has not decided that `12.5` is a
+number: we supplied both the kind and the text ourselves. The scanner and
+parser will automate those choices.
+
+Before continuing, imagine adding a whitespace token after closing
+`NumberExpr` but before closing `Root`. It would become a second root
+child, after the number node. `root.children()` would still return just the
+number node; `root.children_with_tokens()` would also return the whitespace.
+That distinction makes punctuation and trivia accessible without treating
+them as expression nodes.
+
 ## Put the source into green storage
 
 Rowan separates **green storage** from **red handles**. Green nodes store
@@ -276,6 +326,14 @@ The module is now ready to compile. Run:
 ```sh
 cargo check --workspace --all-targets
 ```
+
+Immutability also gives Rowan a useful foundation for revised trees:
+unchanged green subtrees can be shared rather than edited in place. This
+is a capability of the representation, not an automatic incremental parser.
+Our functions still scan and build afresh. Choosing a region to reparse and
+reusing unaffected structure would require additional logic that we are not
+implementing here. For the current lesson, the payoff is already tangible:
+we can ask for a node's source text, parent and byte range.
 
 ## Inspect text, children and positions
 

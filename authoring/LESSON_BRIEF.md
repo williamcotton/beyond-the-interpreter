@@ -1,19 +1,24 @@
 # Current assignment
 
-## CH12-07 — Read expressions through typed views
+## Second manuscript-wide pedagogical examination
 
-**Authorization/status:** User approved text with “ok, looks good, now update rlox”. Text approved; matching implementation and ordered reader route **Ready for combined review** at <http://localhost:4321/chapter-12/12.7-typed-views/>. Final acceptance remains with the user; Chapter 12's implemented checkpoint awaits that combined acceptance. No commit/push or Chapter 13 authorized.
+The user authorized another in-depth review on 2026-11-06, emphasizing repeated
+section flow and demonstrations chosen for the specific lesson. The assignment
+covers the introduction and all 44 existing numbered sections in Chapters 1–12.
 
-**Starting state/preservation:** Accepted 12.6 at c3b9899, with 96 passing tests. Native source matched HEAD. Verified existing archive hash and current Expr/manual example bytes, and current owned parser against complete 12.1 listing. Captured old prefix, CST, token CLI and token_tree observations before changes. Preserved historical sources/archive were not modified.
+The revised text and publication components are ready for review. Setup relies on
+observable experiments, lexical lessons compare boundaries, tests invite specific
+regression predictions, and parser lessons follow structure and control flow.
+Nine situated questions replace uniform closing exercises. Five demonstrations
+cover number boundaries, multiline scopes, precedence, recovery and typed slots.
+The review record documents additional consolidation and explanatory changes.
 
-**Executed route:** Added ast export; created view types/cast/source handles and specific accessors; inserted optional prefix projection; appended typed tests; migrated Cst test projection while retaining old comparison. All-target workspace check and all 82 syntax tests passed with both implementations present. Migrated prefix example; all 35 output lines matched the owned baseline exactly before retirement. Then applied reviewed ParseError ownership/comparison removal, removed expr/parser exports and deleted exactly src/expr.rs, src/parser.rs and examples/expression_shape.rs. Formatting, all-target Clippy with warnings denied, all workspace tests and both observer commands pass afterward. All four final files exactly match complete manuscript views; no manuscript or logic correction needed.
+Site check/build, original-listing preservation, all local links and source-level
+interaction checks pass. Human review should focus on pacing and rendered use of
+7.4, 9.3, 11.5 and 12.6–12.7. Browser appearance/hydration and learning effectiveness
+await that review. No native implementation replay was performed for this prose
+and publication-component pass.
 
-**Result:** Specific Rowan-backed expression views cast by kind and expose optional node/token fields without another owned AST. Position-before-cast preserves missing left/right roles; wrong receiver casts fail separately. Prefix projection preserves numeric display and requires fields while diagnostics remain separate. ParseError now belongs to cst. One active arithmetic parser remains; old reference sources stay reconstructible from archive/earlier complete listings.
-
-**Observed checks:** Final 73 workspace tests pass locally on macOS ARM64/Rust 1.95.0 (6 app, 6 process, 54 syntax, 7 text). The 28 old Expr/parser tests were retired after parity, and five new typed-view tests were added. Tests cover wrong receiver, source/token/range preservation, partial operands/delimiters and the full 35-case observer corpus; all existing CST/source/recovery/resource checks pass. All 35 prefix output lines, full CST example, CLI token streams/status and token_tree output remain byte-for-byte unchanged. Disposable native inspector verifies all ten comparison fixtures/116 tree entries/diagnostics and typed prefix values after retirement; removed afterward. Also observed that a structurally readable prefix can coexist with syntax errors, as documented. No dangling legacy imports remain. Four complete files and whitespace check pass; dependencies, app/text/tree, extension/workflow/archive/components unchanged.
-
-**Publication/limits:** Prior site check/build (46 pages), reference and 147 local-link checks apply because manuscript/navigation/components did not change during implementation. Appearance remains with user; no repeated site suite or screenshot/browser visual review. No new hosted/minimum-compiler/other-platform/oversized-file claim, framework, commit/push or Chapter 13 work.
-
-**Next permitted action:** Human combined review of 12.7 and matching code, including typed accessors and completed retirement. Await acceptance and further instruction; do not advance to Chapter 13 yet.
-
-**Acceptance/next assignment:** User accepted the combined endpoint and Chapter 12 checkpoint by requesting its commit and a Chapter 13 outline. Commit the accepted pair, then plan only; no push.
+Next permitted work is revision within this examination in response to review.
+The user authorized a branch, commit, push and GitHub PR on 2026-11-06.
+Publication and further chapter drafting await separate authorization.

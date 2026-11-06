@@ -12,10 +12,49 @@ next:
 
 <p className="book-subtitle">Chapter 12 · Building Lossless Trees with Rowan</p>
 
-Our arithmetic parser can build expression trees, but those trees leave
-source details behind. We'll introduce Rowan to store lossless syntax.
-Before its nodes can share locations with our scanner and errors, the
-pieces need to agree on what a text offset is.
+Our Chapter 11 parser can turn `001.50 + 2` into an expression tree.
+The tree records addition and the numeric values `1.5` and `2`. That is
+useful structure, but imagine asking it to reproduce the original source.
+Did the first number begin with two zeros? Were there spaces around the
+plus? Our owned `Expr` values no longer contain those answers.
+
+An editor needs access to those details. It must work with the text someone
+actually typed, including comments, whitespace and expressions they have
+not finished typing yet. We need a tree that keeps the original tokens
+alongside their grammatical structure. A tree is **lossless** when its
+tokens, read in order, reproduce the complete source text.
+
+**Rowan is a Rust library for building and navigating syntax trees.** We
+will use it to store that source-preserving structure. We supply the node
+kinds, the tokens and their exact spelling; Rowan supplies the machinery
+that assembles them into a tree and lets us inspect children, parents,
+text and byte ranges. Our parser will decide where the nodes belong and
+how to represent incomplete expressions.
+
+The recursive-descent grammar from Chapter 11 still has a job. Its
+functions recognize numbers, groups, negation and arithmetic, deciding
+which tokens belong together. Previously those functions returned owned
+`Expr` values. In this chapter they will direct Rowan's **tree builder**:
+an object we tell when to open a node, append a token and close a node.
+We will learn those operations with a tiny example in Section 12.2 before
+combining them with recursive descent.
+
+It helps to keep three decisions separate:
+
+- **Parsing strategy:** our recursive-descent functions recognize grammatical structure.
+- **Tree construction:** calls to the builder describe the nodes and tokens to assemble.
+- **Tree representation:** Rowan stores the result and supplies navigation and source ranges.
+
+For example, our grammar still decides that multiplication belongs inside
+addition in `1 + 2 * 3`. The builder records that relationship; Rowan's
+resulting tree lets a later tool find the multiplication node and ask
+which source bytes it covers. Adopting Rowan changes how we construct and
+inspect the output, while preserving the parsing strategy we already know.
+
+The first step is smaller than building a new tree. Our scanner, errors
+and future Rowan nodes all need to agree on source coordinates. We will
+align those types in this section, then build a small lossless tree in
+12.2 and connect our grammar to it in the following sections.
 
 Our `TextSize` currently wraps `usize`. Rowan uses a 32-bit byte measure.
 Both count UTF-8 bytes; they differ in capacity and in their Rust APIs.
@@ -222,6 +261,13 @@ The boundary test passes integer sizes to the same function the scanner
 will call. On a target whose `usize` cannot represent a larger count,
 `checked_add` returns `None`; it doesn't overflow while constructing the
 test. This checks numeric capacity, without requiring gigabytes of memory.
+
+The migration has one point where information can be lost. A source length
+arrives as `usize`, then must fit in the coordinate type used by the tree.
+Check that full length first. Every token span is bounded by it, so this
+one input check establishes the capacity needed by all later spans. The
+subsequent caller edits carry this possible failure outward to a place
+that can explain it to the user.
 
 ## Reject an oversized source before lexing
 

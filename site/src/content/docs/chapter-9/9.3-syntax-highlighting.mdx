@@ -10,6 +10,8 @@ next:
   label: 9.4 · Install the extension we packaged
 ---
 
+import MechanismTrace from '../../../components/MechanismTrace';
+
 <p className="book-subtitle">Chapter 9 · Giving Lox an Editor</p>
 
 Our extension knows how to edit a Lox file, but its words still need display
@@ -287,6 +289,8 @@ test('keywords leave longer names whole', async () => {
 
 These assertions check the scope attached to the original text. Looking at a
 regex in isolation wouldn't tell us which competing grammar rule won.
+
+<MechanismTrace variant="stringContext" client:load />
 
 ## Carry a string across lines
 

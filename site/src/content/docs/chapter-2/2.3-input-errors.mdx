@@ -81,6 +81,19 @@ and [slices](https://doc.rust-lang.org/book/ch04-03-slices.html) in more detail.
 Here they give the filename rule an input we can inspect independently of
 a running process.
 
+A helpful way to read the control flow is as two gates. Argument policy first
+chooses a filename or rejects the invocation. Only a chosen filename reaches
+the file-read gate, which yields source or an I/O error. `main` translates those
+outcomes into messages and a process status. Keeping the policy helper free of
+printing lets the same decision be inspected directly in a test.
+
+Follow the successful borrow from the caller's point of view. The vector in
+`main` owns the argument strings. The helper borrows that vector as a slice,
+then returns a view into its one string. Once the helper returns, the vector
+still owns the storage behind that view. This is why `main` can use the
+filename for the later read. If the helper created a temporary string of its
+own, a view into that temporary would expire when the helper returned.
+
 ## Let main handle the outcome
 
 Now we need to collect the arguments and act on the helper’s result. Use

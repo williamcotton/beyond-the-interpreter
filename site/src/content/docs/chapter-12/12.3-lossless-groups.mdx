@@ -10,6 +10,8 @@ next:
   label: 12.4 · Keep unary operators in the tree
 ---
 
+import MechanismTrace from '../../../components/MechanismTrace';
+
 <p className="book-subtitle">Chapter 12 · Building Lossless Trees with Rowan</p>
 
 Our token tree can reconstruct ` ( 001.50 ) `, but its parentheses are
@@ -172,6 +174,14 @@ boundaries rather than hiding it inside lookahead. The `error` helper
 locates the current token, classifies lexical `Error` tokens, or creates an
 empty range at EOF without inventing token text.
 
+There are now two stacks to follow. Rust's call stack records which grammar
+rule is waiting for which child. Rowan's builder stack records which syntax
+node receives the next token. A parser method can fail while a Rowan node is
+still open. Save that result, close the node, and only then return the failure:
+leaving a grammar call must not strand its tree container.
+
+<MechanismTrace variant="twoStacks" client:load />
+
 ## Let the grammar open and close nodes
 
 Our grammar starts with the same two choices introduced in Chapter 11:
@@ -254,6 +264,8 @@ we already use, with builder balance as an extra responsibility.
 For `(12.5`, the number node finishes, the group reports a missing close
 at EOF, and the group still finishes. Its text is the five bytes `(12.5`.
 We haven't fabricated a `)` token to make the tree look complete.
+
+<MechanismTrace variant="cleanup" client:load />
 
 ## Finish the root even after an error
 

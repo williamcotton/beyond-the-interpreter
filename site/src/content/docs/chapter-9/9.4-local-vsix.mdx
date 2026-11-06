@@ -126,6 +126,14 @@ Append this line to **`.gitignore`**:
 The generated archive is a local build artifact. Keep the source and lockfile
 as the reproducible route to it.
 
+Follow the two possible inputs to the same editor assertions. In development
+mode the host loads contributions from the checkout. In installed mode it
+loads the packaged copy from the temporary extensions directory. The test
+code still comes from our checkout in both cases. That separation lets us
+exercise the shipped language files while keeping test code out of the VSIX.
+The launcher must therefore choose both a contribution source and a way to
+run the assertions inside the host.
+
 ## Let the launcher choose a mode
 
 Development tests should keep working without an archive. The new installed
@@ -245,6 +253,12 @@ Replace the success message after `runTests`:
 
 The existing `finally` still removes the profile after the editor exits, on
 normal success or failure. The downloaded editor cache is retained as before.
+
+Packaging introduces a second source of truth: the archive contains a copy
+of selected files from the checkout at build time. Development mode reads the
+checkout; installed mode reads that copy. Reusing behavioral assertions is
+valuable only if we also establish which copy supplied the language support.
+Otherwise a good source checkout can conceal a broken package.
 
 ## Assert which copy the editor found
 

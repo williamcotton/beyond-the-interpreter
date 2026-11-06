@@ -259,10 +259,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The named tests should report `ok`, and formatting and Clippy should finish
-successfully. There are no dependency, manifest, adapter, or CLI changes, so
-`Cargo.lock` should remain unchanged. Numbers and strings still await their
-lexical rules.
+The tests should pass for exact keywords and longer identifiers. Read the
+expected spelling alongside each kind so a keyword prefix cannot silently
+turn one identifier into several tokens.
 
 <details>
 <summary>Complete resulting syntax library</summary>

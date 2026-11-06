@@ -262,8 +262,7 @@ The launcher should finish with `Editor integration test passed.` and status
 `0`. On a headless Linux machine, use `xvfb-run -a npm run test:editor` with
 Xvfb installed, as in 9.1. Other host diagnostic messages can appear too.
 
-No dependency or script changed, so there's no need to reinstall packages or
-change `package-lock.json`. If the first editing assertion fails, check the
+If the first editing assertion fails, check the
 manifest's configuration path as well as the new file: correctly written
 rules have no effect if VS Code never loads them. Restarting the test command
 launches a fresh host with the current contribution files.

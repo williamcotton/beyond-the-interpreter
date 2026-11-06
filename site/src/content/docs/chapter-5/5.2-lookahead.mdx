@@ -175,6 +175,21 @@ In the third expected `Token`, which has range `[2, 3)`, change
 change `SyntaxKind::Equal` to `SyntaxKind::Bang`. Leave their ranges and the
 first two expected tokens alone.
 
+<aside className="learning-check" aria-label="Catch a lost character">
+
+### Catch a lost character
+
+Suppose a failed equals check accidentally consumes the character it inspected. Which input exposes that mistake, `!=` or `!(`? What token would disappear?
+
+<details>
+<summary>Show the explanation</summary>
+
+`!(` exposes it. The parenthesis would be consumed by the failed lookahead and would be unavailable to the next outer iteration. The successful `!=` case consumes its second character intentionally, so it cannot distinguish these implementations.
+
+</details>
+
+</aside>
+
 ## Check the decisions at token boundaries
 
 Matching a pair is only half the behavior. We also need evidence that failed
@@ -259,9 +274,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The named tests should report `ok`, and formatting and Clippy should finish
-successfully. There are no dependency changes, so `Cargo.lock` should stay
-unchanged.
+The checks should pass. If a lookahead test fails, compare the next token’s
+start with the end of the operator. That boundary reveals whether the
+second character was consumed at the right moment.
 
 <details>
 <summary>Complete resulting syntax library</summary>

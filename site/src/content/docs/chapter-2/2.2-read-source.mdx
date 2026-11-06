@@ -44,6 +44,12 @@ hello.lox
 Creating a file hasn’t changed what our code does. We need to ask the operating
 system to open it and read its contents.
 
+Follow the two strings separately. `filename` owns the path text. A successful
+read creates another owned string, `source`, containing the file's bytes as
+UTF-8 text. Borrowing `&filename` gives the read operation access to the path
+without transferring its ownership. The returned source is independent of that
+borrow: it is newly read text, not a slice of the filename.
+
 ## Read text from the file
 
 The standard library’s `std::fs` module provides filesystem operations.

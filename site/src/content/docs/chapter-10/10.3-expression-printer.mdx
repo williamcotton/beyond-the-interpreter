@@ -172,6 +172,17 @@ The second call uses the same `product` binding. We still own the tree after
 the first call; no clone or reconstruction was needed. The output records
 the operations and their structure, without evaluating the arithmetic.
 
+Try tracing `-(1 + 2)` without running the printer. The unary node waits
+for its grouping child. The group waits for the addition. Addition asks
+its two number children for `1` and `2`, then returns `(+ 1 2)`. The group
+returns `(group (+ 1 2))`; the waiting unary call finally returns
+`(- (group (+ 1 2)))`.
+
+Each call needs only its node and the strings returned by its immediate
+children. It does not search the source for matching parentheses or
+rediscover precedence. Those relationships are already in the tree. This
+is why representing structure explicitly simplifies later consumers.
+
 ## Check the printer's decisions
 
 Until now our example has shown trees we constructed directly. The printer
@@ -278,7 +289,7 @@ Run just the new expression-module tests first:
 cargo test -p rlox-syntax expr::tests
 ```
 
-All four named tests should pass. Then finish with the workspace checks:
+The tests should pass. Then finish with the workspace checks:
 
 ```sh
 cargo fmt --all -- --check
