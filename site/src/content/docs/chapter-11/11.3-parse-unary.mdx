@@ -112,6 +112,12 @@ cargo test -p rlox-syntax parser::tests
 The ten existing parser tests should still pass. Numbers and grouping
 reach their old rules through the new fallback.
 
+For `--1`, descent first discovers how much input belongs to the operand.
+The first minus waits while a second unary call handles the second minus.
+The number ends the descent. Returning then builds the inner negation and
+finally the outer one. Consuming a minus before recurring is what makes
+progress toward that base case.
+
 ## Follow a chain back out
 
 For `--123`, both minus tokens are consumed before the number is returned:
@@ -141,6 +147,21 @@ Grouping remains visible in the tree:
 In the first case, the unary operand is a grouped number. In the second,
 the grouping's child is a unary expression. Both use the same existing
 expression types, connected in different orders.
+
+<aside className="learning-check" aria-label="Trace a mixed recursive path">
+
+### Trace a mixed recursive path
+
+For `-(-1)`, follow the path from the outer expression to the number. How many grouping or unary wrappers does that path contain?
+
+<details>
+<summary>Show the explanation</summary>
+
+Three wrappers, in order unary, grouping, unary. The shared budget follows this entire path. Counting only one kind of wrapper would undercount the depth that the printer and parser must handle.
+
+</details>
+
+</aside>
 
 ## Share the depth budget
 
@@ -308,9 +329,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-All fourteen parser tests and the existing workspace tests should pass.
-We can now parse numbers, grouped expressions and chains of unary negation.
-Next we'll combine operands with multiplication and division.
+The tests should pass. Compare `--123` with `-(123)` once more. The first
+has two unary wrappers. The second has a unary wrapper around a grouping.
+The recursive calls preserve the distinction in the returned tree.
 
 <details>
 <summary>Complete resulting parser module</summary>

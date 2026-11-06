@@ -10,6 +10,8 @@ next:
   label: 12.6 · Keep incomplete and unexpected input inspectable
 ---
 
+import MechanismTrace from '../../../components/MechanismTrace';
+
 import LosslessTree from '../../../components/LosslessTree';
 
 <p className="book-subtitle">Chapter 12 · Building Lossless Trees with Rowan</p>
@@ -38,6 +40,13 @@ that left association.
 Start from [12.4](/chapter-12/12.4-lossless-unary/), in the **Rust workspace
 directory**. We'll add multiplication/division first, then addition and
 subtraction, following the [precedence rules from Crafting Interpreters](https://craftinginterpreters.com/parsing-expressions.html#recursive-descent-parsing).
+
+The owned parser returned a tree, so its caller could inspect that tree's
+height. The builder now holds the completed structure. Each grammar call
+can instead return just the height its caller needs. A number returns zero.
+A group adds one to its child's height. A binary wrapper adds one to the
+larger child height. Those small return values let the grammar enforce its
+budget while Rowan accumulates the actual tree.
 
 ## Return height without keeping another AST
 
@@ -165,6 +174,15 @@ Add the one node kind after `UnaryExpr` in
 +    BinaryExpr,
  }
 ```
+
+A checkpoint is a bookmark between a container's children, not a saved
+parser cursor. Record it before emitting the left operand. Once the right
+operand succeeds, `start_node_at` opens a node around the children emitted
+since that bookmark; `finish_node` completes the wrapper. No source is read
+again. Reusing the bookmark wraps the previous binary node into the next
+left-associated parent.
+
+<MechanismTrace variant="checkpoint" client:load />
 
 ## Wrap multiplication and division
 

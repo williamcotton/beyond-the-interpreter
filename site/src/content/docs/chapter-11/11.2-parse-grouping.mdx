@@ -273,6 +273,12 @@ cargo test -p rlox-syntax parser::tests
 
 The existing five tests should pass with their broadened expectations.
 
+Every recursive call works on the same parser object. Calling an inner
+expression does not copy the cursor or restore it on return. It advances the
+shared cursor past the inner expression and leaves the closing parenthesis
+for the grouping rule that opened it. The call stack remembers which group is
+waiting; the cursor remembers what input remains.
+
 ## Watch the cursor return to a closing delimiter
 
 For `((123))`, the significant tokens retain these source ranges:
@@ -435,9 +441,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-All ten parser tests and the existing workspace tests should pass. No
-expression type, printer, scanner, dependency or CLI change is needed.
-Next we'll put unary negation in front of these primary expressions.
+The checks should pass. In the two malformed cases, `(123` fails inside
+the grouping rule and `123)` fails at the outer entry. The different
+expectations explain which call reports each error.
 
 <details>
 <summary>Complete resulting parser module</summary>

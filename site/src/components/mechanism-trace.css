@@ -1,0 +1,20 @@
+.mechanism-trace pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  padding: 0.8rem;
+  border: 1px solid var(--sl-color-gray-4);
+  border-radius: 0.3rem;
+  font-size: 0.85rem;
+  line-height: 1.65;
+}
+.mechanism-trace code { white-space: normal; overflow-wrap: anywhere; }
+.mechanism-trace pre:focus-visible {
+  outline: 3px solid var(--sl-color-accent-high);
+  outline-offset: 3px;
+}
+.mechanism-trace button[aria-pressed='true'] {
+  background: var(--sl-color-accent-low);
+  border-color: var(--sl-color-accent-high);
+  font-weight: 700;
+}

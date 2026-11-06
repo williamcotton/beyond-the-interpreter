@@ -90,3 +90,25 @@ h1 {
   .sl-markdown-content { font-size: 1rem; }
   .site-title { font-size: 1.15rem; }
 }
+
+/* Keep each question and its answer visually separate from reference listings. */
+.sl-markdown-content .learning-check {
+  margin-block: 2rem;
+  padding: clamp(1rem, 3vw, 1.4rem);
+  border: 1px solid var(--sl-color-gray-4);
+  border-inline-start: 0.25rem solid var(--sl-color-accent);
+  border-radius: 0.4rem;
+  background: var(--sl-color-gray-6);
+}
+
+.sl-markdown-content .learning-check > :first-child {
+  margin-top: 0;
+}
+
+.sl-markdown-content .learning-check > :last-child {
+  margin-bottom: 0;
+}
+
+.sl-markdown-content .learning-check + details {
+  margin-top: 2rem;
+}

@@ -45,6 +45,12 @@ The listing answers what the scanner found, the summary signals the problem
 to a person, and the exit status lets a calling script react. On the shell
 used in these examples, success is `0` and our failure status is `1`.
 
+The error flag summarizes the stream seen so far. Its rule is monotonic:
+once any token is an error, later valid tokens cannot make the scan successful.
+That lets us keep producing a complete listing and postpone the status decision
+until the loop ends. An immediate failure return would confuse reporting the
+error with abandoning the remaining observations.
+
 ## Remember an error without stopping
 
 We need the `Error` variant for a comparison. Replace the syntax import:
@@ -114,10 +120,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-They should pass. There are no manifest or dependency edits, so `Cargo.lock`
-should stay unchanged. These tests retain the earlier parser and scanner
-checks; the shell observations below check the new CLI policy. We'll automate
-real-process checks in the next section.
+The checks should pass. Now observe the complete command through its two
+output streams and exit status.
 
 Create **`rlox/scan-error.lox`** containing the opening example:
 

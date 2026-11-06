@@ -123,6 +123,18 @@ well as parse it. Clap’s
 [derive tutorial](https://docs.rs/clap/latest/clap/_derive/_tutorial/index.html)
 shows how these declarations determine the interface.
 
+Trace one successful invocation through the declaration before wiring it
+into `main`. For `rlox source hello.lox`, command recognition chooses the
+`Source` variant and stores `hello.lox` in its `file` field. The result is
+ordinary Rust data: a `Cli` whose `command` is `Command::Source { file }`.
+The match in `main` takes over from there. A missing filename prevents that
+value from being produced, so the file-reading arm never runs.
+
+This is the useful boundary when adopting a library: understand the data
+entering it, the value leaving it, and the behavior still owned by your
+code. The derive attributes can then be read as a declaration of that
+boundary rather than a list of incantations.
+
 ## Replace manual parsing
 
 `Cli::parse()` reads the process arguments. On a valid command it returns a

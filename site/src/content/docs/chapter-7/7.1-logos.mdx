@@ -77,6 +77,11 @@ The named tests should report `ok`. We’ll run the same expectations after
 replacing the scanner. This gives us a concrete comparison without keeping
 two production scanners.
 
+The replacement has three parts. Our enum attributes describe the accepted
+spellings. Logos generates recognition code from those attributes. The
+adapter below converts its results and byte spans into our existing tokens.
+The tests observe the token stream at the end of that chain.
+
 ## Add Logos to the syntax library
 
 Use Logos **0.16.1**. Its default features include the derive macro, so we

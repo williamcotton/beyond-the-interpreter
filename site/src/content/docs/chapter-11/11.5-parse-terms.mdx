@@ -10,6 +10,8 @@ next:
   label: 12.1 · Use Rowan-compatible text coordinates
 ---
 
+import BoundaryCases from '../../../components/BoundaryCases';
+
 <p className="book-subtitle">Chapter 11 · Parsing Expressions by Hand</p>
 
 `1 + 2 * 3` and `(1 + 2) * 3` contain the same numbers and operators, but
@@ -58,6 +60,8 @@ That call order implements **precedence**. The additive rule can't build its
 parent until the multiplicative rule has finished its operand. It doesn't
 need to inspect the source string for a later `*` or rearrange a tree after
 construction.
+
+<BoundaryCases variant="precedence" client:load />
 
 ## Add the term loop
 
@@ -336,6 +340,7 @@ numbers, grouping, unary negation and arithmetic operators, with explicit
 precedence, associativity and failure behavior. The next chapter introduces
 lossless syntax trees with Rowan so we can keep concrete source details and
 represent incomplete syntax as we build toward editor tooling.
+
 
 <details>
 <summary>Complete resulting parser module</summary>

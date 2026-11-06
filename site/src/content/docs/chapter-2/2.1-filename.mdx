@@ -10,6 +10,8 @@ next:
   label: 2.2 · Read the source
 ---
 
+import MechanismTrace from '../../../components/MechanismTrace';
+
 <p className="book-subtitle">Chapter 2 · Reading Source</p>
 
 Our executable always prints the same greeting. To do something useful with a
@@ -42,6 +44,8 @@ Hello from rlox!
 The argument has reached the process, but our code doesn’t read it yet. The
 file doesn’t need to exist for this experiment: we’re going to inspect the name,
 then add file reading in the next section.
+
+<MechanismTrace variant="arguments" client:load />
 
 ## Select the filename
 

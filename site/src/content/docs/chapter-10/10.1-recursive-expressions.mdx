@@ -180,6 +180,21 @@ cargo check -p rlox-syntax
 
 It should now succeed. We have a recursive type with a finite layout.
 
+<aside className="learning-check" aria-label="Count the allocations">
+
+### Count the allocations
+
+In the two-level grouping `((123))`, how many calls to `Box::new` connect the three expression values? Draw the ownership arrows before inspecting the example.
+
+<details>
+<summary>Show the explanation</summary>
+
+Two calls. The outer group owns a box containing the inner group. The inner group owns a box containing the number. Each box gives its parent a fixed-size field while owning the child value in a separate allocation.
+
+</details>
+
+</aside>
+
 ## Construct and inspect a small tree
 
 Let's build the trees from our diagrams. Cargo examples give us a small

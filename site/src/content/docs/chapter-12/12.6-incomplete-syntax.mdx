@@ -10,6 +10,8 @@ next:
   label: 12.7 · Read expressions through typed views
 ---
 
+import MechanismTrace from '../../../components/MechanismTrace';
+
 import LosslessTree from '../../../components/LosslessTree';
 
 <p className="book-subtitle">Chapter 12 · Building Lossless Trees with Rowan</p>
@@ -187,6 +189,23 @@ missing left expression without consuming the star. The factor loop then
 consumes `*` and parses `2` as the right operand. Both slots are present
 when it wraps the binary node. For `1 +`, the right operand returns a
 missing node at EOF and the term loop can finish the sum.
+
+<aside className="learning-check" aria-label="Who makes progress?">
+
+### Who makes progress?
+
+For `(1 + )`, the operand rule creates an empty MissingExpr and leaves `)` unread. Follow control back to the rule that will consume it.
+
+<details>
+<summary>Show the explanation</summary>
+
+The missing operand returns to the term loop, which finishes the partial addition. The expression returns to the group. The group consumes its own close. The zero-width node records the absent operand, and returning control enables the enclosing rule to advance.
+
+</details>
+
+</aside>
+
+<MechanismTrace variant="recovery" client:load />
 
 ## Let a group consume its own close
 

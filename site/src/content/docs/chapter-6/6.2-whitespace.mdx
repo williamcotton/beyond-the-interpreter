@@ -163,6 +163,21 @@ These three inputs each contain one character; the nonbreaking space uses
 two UTF-8 bytes. The expected range covers that whole character, even when
 it isn’t recognized as whitespace.
 
+<aside className="learning-check" aria-label="Two ways a scanner can be wrong">
+
+### Two ways a scanner can be wrong
+
+Imagine one scanner emits the whole source as a single `Error` token. Another returns correctly classified names and operators but drops spaces. Which assertions would catch each mistake?
+
+<details>
+<summary>Show the explanation</summary>
+
+The exact-kind and boundary assertions catch the single-error scanner. Source reconstruction catches the missing spaces. Coverage and classification establish different properties, so we keep both sets of assertions.
+
+</details>
+
+</aside>
+
 ## Check that no source bytes disappear
 
 The scanner already kept unsupported characters as `Error` tokens. We want
@@ -237,9 +252,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The named tests should report `ok`, and formatting and Clippy should finish
-successfully. No new imports, manifests, dependencies, or coordinate methods
-are needed. `Cargo.lock` and the CLI stay unchanged.
+Both the exact-token and reconstruction checks should pass. If only
+reconstruction fails, look for a gap, overlap or invalid UTF-8 endpoint
+between neighboring ranges.
 
 <details>
 <summary>Complete resulting syntax library</summary>

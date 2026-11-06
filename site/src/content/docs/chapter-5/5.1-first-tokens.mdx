@@ -118,6 +118,12 @@ We keep the spelling in the original source. Given a token and that source,
 `token.range.slice(source)` can recover it without a separate owned string
 inside every token.
 
+The scanner keeps two useful views of the same input. Character iteration
+answers what was read, so we can choose a token kind. Byte positions answer
+where it came from, so later code can recover the spelling. An unsupported
+character still occupies source bytes and needs a token range. Advancing the
+cursor and classifying the text are separate parts of the job.
+
 ## Walk characters, record bytes
 
 A scan needs a position that advances through the source. Rust’s

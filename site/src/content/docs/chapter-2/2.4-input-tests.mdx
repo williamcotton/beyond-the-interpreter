@@ -122,6 +122,21 @@ cargo test
 Each named test should report `ok`. Their execution order is unimportant;
 each constructs its own input and checks its own result.
 
+<aside className="learning-check" aria-label="Choose the test that distinguishes the rules">
+
+### Choose the test that distinguishes the rules
+
+Two implementations both accept one filename. One accepts any nonempty argument list, and the other requires exactly one argument. Which of our test inputs makes their answers differ?
+
+<details>
+<summary>Show the explanation</summary>
+
+Two filenames. Both implementations accept one and reject zero. The extra-argument case exposes the policy difference. Predict that failure before making the temporary edit below.
+
+</details>
+
+</aside>
+
 ## Make a mistake on purpose
 
 Let’s check that the extra-argument test can detect the behavior we removed

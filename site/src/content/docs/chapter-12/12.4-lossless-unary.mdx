@@ -125,6 +125,12 @@ one to the same `nesting` count; numbers add none. A path with 63 minuses
 and one group reaches the limit of 64, just like 64 groups or 64 minuses.
 A separate unary counter would allow mixed paths to exceed that limit.
 
+A call to `bump` now has two effects: append the current source token to
+the open Rowan node, then advance the parser cursor. The grammar decides
+when to call it; the builder stack decides where its token goes. Read
+`eat_trivia` the same way: it advances by emitting those bytes, so its
+placement determines the parent of whitespace and comments.
+
 ## Keep trivia at the container that consumes it
 
 `unary` calls `eat_trivia` before choosing an expression. On the first call,
@@ -165,6 +171,21 @@ Run:
 ```sh
 cargo check --workspace --all-targets
 ```
+
+<aside className="learning-check" aria-label="Place the space">
+
+### Place the space
+
+For ` -1 `, predict which node owns the leading space, the minus and the final space. Now put a space between the minus and the number. Which open container receives it?
+
+<details>
+<summary>Show the explanation</summary>
+
+The leading and final spaces are root children. The minus belongs to UnaryExpr. A space between the minus and its operand is emitted while UnaryExpr is open, before NumberExpr opens, so it becomes another child of UnaryExpr.
+
+</details>
+
+</aside>
 
 ## Observe chains, groups and missing operands
 

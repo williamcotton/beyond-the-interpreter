@@ -236,6 +236,13 @@ that document, and we check the document it actually shows.
 This file can't run as an ordinary Node script: the `vscode` module is
 provided by the extension host. We need a second file to launch that host.
 
+The two test files run in different processes. The launcher starts in Node,
+where it can prepare a disposable profile and locate the editor. The test's
+`run` function executes inside the editor's extension host, where the
+`vscode` API can open a document and inspect its language ID. The launcher
+passes the path to that compiled test into the host. Read the next file as
+the setup and cleanup around that handoff.
+
 ## Launch the host from Node
 
 Create **`test/runEditor.ts`**:
